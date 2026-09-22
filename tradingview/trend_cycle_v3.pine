@@ -23,7 +23,7 @@ kShow = input.bool(true, "启用", group=g2)
 bull = close > e20 and e20 > e50
 bear = close < e20 and e20 < e50
 kCol = bull ? #00A86B : bear ? #212121 : #9E9E9E
-bool isDaily = timeframe.period == "D"        // 系统规则是日线 EMA20/50，非日线时关闭变色与策略行
+bool isDaily = timeframe.isdaily and timeframe.multiplier == 1   // 1D 图；不用 period=="D"，TradingView 可能返回 "1D"
 barcolor(kShow and isDaily ? kCol : na, title="三态K线")
 float dist = (close - e50) / close * 100      // 距EMA50 % = 单笔风险 %，仓位 = 风险预算% ÷ 它
 
