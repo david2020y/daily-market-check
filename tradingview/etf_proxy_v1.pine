@@ -1,0 +1,67 @@
+//@version=6
+// ETF 先行代理 v1：美股盘中就能看到的三个「净流入」代理 + 与「资金过热」刹车的距离。
+// 只是参考，不是规则：ETF 只做刹车（见 SKILL.md），本指标不产生任何入场信号。
+// 用法：加到 BTC 日线图上，显示在副图；「本周累计流入」从日报 ETF 行手填。
+indicator("ETF 先行代理 v1（Coinbase溢价 / IBIT量比 / CME基差）", shorttitle="ETF代理v1", overlay=false, format=format.price, precision=2)
+
+// ─── ① 品种（在你的 TradingView 上若代码不同，改这里）───
+g1 = "① 品种"
+cbSym  = input.symbol("COINBASE:BTCUSD",  "Coinbase 现货", group=g1)
+bnSym  = input.symbol("BINANCE:BTCUSDT",  "Binance 现货", group=g1)
+cmeSym = input.symbol("CME:BTC1!",        "CME 近月期货", group=g1)
+etfSym = input.symbol("NASDAQ:IBIT",      "ETF（IBIT 占流入一半以上）", group=g1)
+
+// ─── ② 参考阈值 + 手填 ───
+g2 = "② 阈值与手填"
+thrPrem = input.float(0.10, "溢价阈值 %（超过视为美国盘买盘）", step=0.05, group=g2)
+thrVol  = input.float(1.5,  "量比阈值（超过视为放量）", step=0.1, group=g2)
+weekIn  = input.float(0.0,  "本周 ETF 累计流入（亿美元，手填自日报）", step=0.1, group=g2)
+brakeWk = 25.0   // SKILL.md：本周 >25 亿 且 距50日高 <10% → 资金过热
+brakeHi = 10.0
+
+// ─── ③ 取数 ───
+cb  = request.security(cbSym,  timeframe.period, close)
+bn  = request.security(bnSym,  timeframe.period, close)
+fut = request.security(cmeSym, timeframe.period, close)
+[ev, evAvg, ec, ecPrev] = request.security(etfSym, "D", [volume, ta.sma(volume[1], 20), close, close[1]])
+
+prem   = (cb - bn) / bn * 100                 // Coinbase 溢价 %
+prem5  = ta.sma(prem, 5)
+basis  = (fut - cb) / cb * 100                // CME 近月基差 %（相对 Coinbase 现货）
+volR   = na(evAvg) or evAvg == 0 ? na : ev / evAvg   // IBIT 当日量 / 前 20 日均量（盘中为部分量）
+etfChg = na(ecPrev) or ecPrev == 0 ? na : (ec - ecPrev) / ecPrev * 100
+hi50   = ta.highest(high, 50)                 // 主图品种（应为 BTC）
+distHi = (hi50 - close) / hi50 * 100
+
+// ─── ④ 副图：溢价柱 + 基差线 ───
+plot(prem, "Coinbase 溢价 %", style=plot.style_columns, color=prem >= 0 ? color.new(#00A86B, 30) : color.new(#D32F2F, 30))
+plot(prem5, "溢价 5 日均", color=#FFC107, linewidth=1)
+plot(basis, "CME 近月基差 %", color=#7E57C2, linewidth=2)
+hline(0, "零线", color=#9E9E9E)
+hline(thrPrem, "溢价阈值", color=color.new(#00A86B, 60), linestyle=hline.style_dotted)
+hline(-thrPrem, "折价阈值", color=color.new(#D32F2F, 60), linestyle=hline.style_dotted)
+
+// ─── ⑤ 综合倾向（透明打分，仅参考）───
+int s = 0
+s += prem > thrPrem ? 1 : prem < -thrPrem ? -1 : 0
+s += not na(volR) and volR > thrVol ? (etfChg > 0 ? 1 : etfChg < 0 ? -1 : 0) : 0
+string lean = s >= 1 ? "偏流入" : s <= -1 ? "偏流出" : "中性"
+color leanCol = s >= 1 ? #00A86B : s <= -1 ? #D32F2F : #9E9E9E
+bool nearHi = distHi < brakeHi
+bool overheat = nearHi and weekIn > brakeWk
+
+// ─── ⑥ 表格 ───
+g3 = "③ 表格"
+showTbl = input.bool(true, "显示表格", group=g3)
+var table t = table.new(position.top_right, 2, 6, border_width=1, frame_width=1, frame_color=#9E9E9E)
+f_cell(int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.small)
+    table.cell(t, 1, r, v, bgcolor=color.new(c, 75), text_color=#000000, text_size=size.small)
+f_pct(float x) => (x >= 0 ? "+" : "") + str.tostring(x, "#.##") + "%"
+if showTbl and barstate.islast
+    f_cell(0, "Coinbase 溢价", f_pct(prem) + "（5日均 " + f_pct(prem5) + "）", prem > thrPrem ? #00A86B : prem < -thrPrem ? #D32F2F : #9E9E9E)
+    f_cell(1, "IBIT 量比", na(volR) ? "—" : str.tostring(volR, "#.#") + "×（今日 " + f_pct(etfChg) + "，盘中为部分量）", na(volR) ? #9E9E9E : volR > thrVol ? (etfChg >= 0 ? #00A86B : #D32F2F) : #9E9E9E)
+    f_cell(2, "CME 近月基差", f_pct(basis) + "（走阔多为套利盘，非方向买盘）", basis > 1 ? #FFC107 : #FFFFFF)
+    f_cell(3, "距 50 日高", str.tostring(distHi, "#.#") + "%" + (nearHi ? "（<10%，本周 >25 亿即资金过热）" : "（≥10%，本周不会触发资金过热）"), nearHi ? #FFC107 : #FFFFFF)
+    f_cell(4, "本周累计（手填）", str.tostring(weekIn, "#.##") + " / 25 亿" + (overheat ? " → 资金过热：否决新入场/新开合约" : nearHi ? "，还差 " + str.tostring(brakeWk - weekIn, "#.##") + " 亿" : ""), overheat ? #D32F2F : #FFFFFF)
+    f_cell(5, "美国盘倾向", lean + "（仅参考，不是规则；ETF 只否决不发起）", leanCol)
