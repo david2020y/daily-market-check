@@ -75,7 +75,7 @@ NEXT_HALVING_EST = pd.Timestamp("2028-04-15")   # 估算，减半前一年按区
 CYCLE_BOTTOM = "2026-06-30"                      # 本轮实测底（信息用）
 EXIT_ARM, EXIT_HARD, EXIT_END = 15, 19, 20       # 减半后 15 月武装出场；19 月硬出场；20 月窗口结束
 REENTRY_OPEN, REENTRY_HARD = 26, 34              # 减半后 26–34 月再入场窗口，34 月硬买回
-LEV_OPEN_PREV = 30                               # 合约窗口 = [上次减半+30 月, 本次减半+15 月] = [H−18, H+15]
+LEV_OPEN_PREV = 26                               # 合约窗口 = [上次减半+26 月, 本次减半+15 月] = [H−22, H+15]，与再入场窗口同步开启（回测 H+26～32 等价）
 
 
 def cycle(today=None):

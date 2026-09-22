@@ -1,0 +1,2 @@
+date,btc_close,btc_state,btc_ema50,eth_close,eth_state,etf_day,etf_in20,etf_week,brake,funding_annual,cycle_month,phase,action_btc,action_eth,overlay
+2026-09-22,86611.01,顺势,75016.17394861225,2776.57,顺势,9.99,12,9.99,,10.950000000000001,29.1,再入场窗口,BTC 持有（周期持有期，趋势出场未武装）,ETH 持有（周期持有期，趋势出场未武装）,合约 可持1x（费率年化 11%）

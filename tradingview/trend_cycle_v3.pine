@@ -23,7 +23,8 @@ kShow = input.bool(true, "启用", group=g2)
 bull = close > e20 and e20 > e50
 bear = close < e20 and e20 < e50
 kCol = bull ? #00A86B : bear ? #212121 : #9E9E9E
-barcolor(kShow ? kCol : na, title="三态K线")
+bool isDaily = timeframe.period == "D"        // 系统规则是日线 EMA20/50，非日线时关闭变色与策略行
+barcolor(kShow and isDaily ? kCol : na, title="三态K线")
 float dist = (close - e50) / close * 100      // 距EMA50 % = 单笔风险 %，仓位 = 风险预算% ÷ 它
 
 // ─── ③ 周期层：减半日与阶段 ───
@@ -46,7 +47,7 @@ f_lastHalv() =>
 int lastH = f_lastHalv()
 float mSince = na(lastH) ? na : (time - lastH) / MONTH_MS
 string phase = na(mSince) ? "—" : mSince >= 15 and mSince < 20 ? "出场武装期" : mSince >= 20 and mSince < 26 ? "熊市等待期" : mSince >= 26 and mSince < 34 ? "再入场窗口" : "持有累积期"
-bool levOK = not na(mSince) and (mSince >= 30 or mSince < 15)
+bool levOK = not na(mSince) and (mSince >= 26 or mSince < 15)   // 合约窗口 [H−22, H+15]，下边界与再入场窗口同步
 color phCol = phase == "出场武装期" ? color.new(#E53935, 85) : phase == "再入场窗口" ? color.new(#00A86B, 88) : phase == "熊市等待期" ? color.new(#9E9E9E, 90) : na
 bgcolor(showCycle ? phCol : na, title="阶段背景")
 // 减半竖线 + 硬日期点线
@@ -81,11 +82,8 @@ if not na(mSince)
         nxtLab := "H+20 进入熊市等待"
         nxtTs := f_ms(lastH, 20)
     else if mSince < 26
-        nxtLab := "H+26 再入场窗口开"
+        nxtLab := "H+26 再入场+合约窗口开"
         nxtTs := f_ms(lastH, 26)
-    else if mSince < 30
-        nxtLab := "H+30 合约窗口开"
-        nxtTs := f_ms(lastH, 30)
     else if mSince < 34
         nxtLab := "H+34 硬买回"
         nxtTs := f_ms(lastH, 34)
@@ -122,7 +120,11 @@ var table t = table.new(position.top_right, 2, 9, border_width=1, frame_width=1,
 f_cell(int r, string k, string v, color c) =>
     table.cell(t, 0, r, k, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.small)
     table.cell(t, 1, r, v, bgcolor=color.new(c, 75), text_color=#000000, text_size=size.small)
-if showTbl and barstate.islast
+if showTbl and barstate.islast and not isDaily
+    table.clear(t, 0, 0, 1, 8)
+    table.cell(t, 0, 0, "⚠ 请切到日线（1D）", bgcolor=#D32F2F, text_color=#FFFFFF, text_size=size.normal)
+    table.cell(t, 1, 0, "EMA20/50、状态、仓位、策略行只在日线有效；周期背景与竖线不受影响", bgcolor=color.new(#D32F2F, 60), text_color=#000000, text_size=size.small)
+if showTbl and barstate.islast and isDaily
     string st = bull ? "顺势" : bear ? "逆势" : "震荡"
     f_cell(0, "状态", st, bull ? #00A86B : bear ? #D32F2F : #9E9E9E)
     f_cell(1, "收盘", str.tostring(close, format.mintick), #FFFFFF)
@@ -130,11 +132,11 @@ if showTbl and barstate.islast
     f_cell(3, "EMA50 失效", str.tostring(e50, format.mintick), #E53935)
     f_cell(4, "距EMA50", (dist >= 0 ? "+" : "") + str.tostring(dist, "#.#") + "%（1%风险→仓位 " + (dist > 0 ? str.tostring(100 / dist, "#.#") + "%" : "—") + "）", dist >= 0 ? #00A86B : #D32F2F)
     f_cell(5, "周期", na(mSince) ? "—" : "减半后 " + str.tostring(mSince, "#.#") + " 月 · " + phase, phCol)
-    f_cell(6, "合约窗口", levOK ? "开放（需顺势+ETF无刹车+费率<20%）" : na(lastH) ? "关闭" : "关闭（" + str.format_time(f_ms(lastH, 30), "yyyy-MM-dd", "UTC") + " 起）", levOK ? #00A86B : #9E9E9E)
+    f_cell(6, "合约窗口", levOK ? "开放（需顺势+ETF无刹车+费率<20%）" : na(lastH) ? "关闭" : "关闭（" + str.format_time(f_ms(lastH, 26), "yyyy-MM-dd", "UTC") + " 起）", levOK ? #00A86B : #9E9E9E)
     f_cell(7, "下一里程碑", na(nxtTs) ? "—" : nxtLab + " " + str.format_time(nxtTs, "yyyy-MM-dd", "UTC") + "（" + str.tostring(daysLeft, "#") + " 天后）", #FFFFFF)
     f_cell(8, "本阶段策略", act, actCol)
 
 // ─── ⑤ 警报：只有 3 个 ───
-alertcondition(bull and not bull[1], "转顺势", "价>EMA20>EMA50：转顺势")
-alertcondition(bear and not bear[1], "转逆势", "价<EMA20<EMA50：转逆势")
-alertcondition(ta.crossunder(close, e50), "收盘跌破 EMA50", "收盘跌破 EMA50（仅出场武装期执行）")
+alertcondition(isDaily and bull and not bull[1], "转顺势", "价>EMA20>EMA50：转顺势")
+alertcondition(isDaily and bear and not bear[1], "转逆势", "价<EMA20<EMA50：转逆势")
+alertcondition(isDaily and ta.crossunder(close, e50), "收盘跌破 EMA50", "收盘跌破 EMA50（仅出场武装期执行）")
