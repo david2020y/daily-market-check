@@ -4,6 +4,7 @@
   python3 daily_check.py                       # 空仓
   python3 daily_check.py --position long       # 有多仓（只看收盘是否破 EMA50）
   python3 daily_check.py --risk 2              # 单笔风险预算 2%（默认 1%）
+  python3 daily_check.py --mode trend          # 关闭周期层，退回 v2 纯趋势规则
   python3 daily_check.py --out docs            # 另存 latest.md/latest.json（定时任务用）
   python3 daily_check.py --json                # 只输出 JSON
 设计: 所有判断在脚本内完成，调用方只需照抄文本。ETF 缺失只影响 ETF 行，永不影响动作/关键价。
@@ -68,6 +69,41 @@ def fetch_klines(sym):
     raise RuntimeError(" | ".join(errs))
 
 
+# ---------------- 周期层（v3）：减半日历决定「哪条规则处于武装状态」 ----------------
+HALVINGS = [pd.Timestamp(d) for d in ("2012-11-28", "2016-07-09", "2020-05-11", "2024-04-20")]
+NEXT_HALVING_EST = pd.Timestamp("2028-04-15")   # 估算，减半前一年按区块高度校正
+CYCLE_BOTTOM = "2026-06-30"                      # 本轮实测底（信息用）
+EXIT_ARM, EXIT_HARD, EXIT_END = 15, 19, 20       # 减半后 15 月武装出场；19 月硬出场；20 月窗口结束
+REENTRY_OPEN, REENTRY_HARD = 26, 34              # 减半后 26–34 月再入场窗口，34 月硬买回
+LEV_OPEN_PREV = 30                               # 合约窗口 = [上次减半+30 月, 本次减半+15 月] = [H−18, H+15]
+
+
+def cycle(today=None):
+    today = pd.Timestamp(today or time.strftime("%Y-%m-%d"))
+    hs = HALVINGS + ([NEXT_HALVING_EST] if NEXT_HALVING_EST > HALVINGS[-1] else [])
+    past = [h for h in hs if h <= today]
+    h = past[-1]
+    est = h == NEXT_HALVING_EST
+    m = (today - h).days / 30.44
+    if EXIT_ARM <= m < EXIT_END:
+        phase = "出场武装期"
+    elif EXIT_END <= m < REENTRY_OPEN:
+        phase = "熊市等待期"
+    elif REENTRY_OPEN <= m < REENTRY_HARD:
+        phase = "再入场窗口"
+    else:
+        phase = "持有累积期"
+    lev_ok = (m >= LEV_OPEN_PREV) or (m < EXIT_ARM)
+    nxt = NEXT_HALVING_EST if h < NEXT_HALVING_EST else h + pd.DateOffset(months=48)
+    base = h if m < EXIT_END else nxt          # 出场武装/硬出场属于哪次减半
+    ms = lambda d, k: (d + pd.DateOffset(months=k)).strftime("%Y-%m-%d")
+    return {"halving": h.strftime("%Y-%m-%d"), "halving_est": est, "months": m, "phase": phase, "lev_ok": lev_ok,
+            "lev_open": ms(h, LEV_OPEN_PREV) if not lev_ok else None,
+            "exit_arm": ms(base, EXIT_ARM), "exit_hard": ms(base, EXIT_HARD),
+            "reentry_open": ms(h, REENTRY_OPEN), "reentry_hard": ms(h, REENTRY_HARD),
+            "next_halving": nxt.strftime("%Y-%m-%d"), "cycle_bottom": CYCLE_BOTTOM}
+
+
 def trend(sym):
     try:
         df, src = fetch_klines(sym)
@@ -78,42 +114,32 @@ def trend(sym):
     ema50 = c.ewm(span=50, adjust=False).mean().iloc[-1]
     prev_c = c.shift(1)
     tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
-    atr = tr.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]   # Wilder ATR14（仅供参考，不参与规则）
+    atr = tr.ewm(alpha=1 / 14, adjust=False).mean().iloc[-1]
     close = float(c.iloc[-1])
-    if close > ema20 > ema50:
-        state = "顺势"
-    elif close < ema20 < ema50:
-        state = "逆势"
-    else:
-        state = "震荡"
+    state = "顺势" if close > ema20 > ema50 else ("逆势" if close < ema20 < ema50 else "震荡")
     high50 = float(h.tail(50).max())
-    return {
-        "status": "ok", "source": src,
-        "candle_date": pd.to_datetime(df["t"].iloc[-1], unit="ms").strftime("%Y-%m-%d"),
-        "close": close, "ema20": float(ema20), "ema50": float(ema50), "atr14": float(atr),
-        "state": state, "risk_pct": (close - ema50) / close * 100,      # 入场到失效的距离 = 单笔风险%
-        "high50": high50, "dist_high50_pct": (high50 - close) / high50 * 100,
-    }
+    return {"status": "ok", "source": src,
+            "candle_date": pd.to_datetime(df["t"].iloc[-1], unit="ms").strftime("%Y-%m-%d"),
+            "close": close, "ema20": float(ema20), "ema50": float(ema50), "atr14": float(atr),
+            "state": state, "risk_pct": (close - ema50) / close * 100,
+            "high50": high50, "dist_high50_pct": (high50 - close) / high50 * 100}
 
 
 def funding(sym):
-    """币本位永续资金费率（年化%）。OKX → Bybit；失败返回 None。"""
-    try:
-        js = _get(f"https://www.okx.com/api/v5/public/funding-rate?instId={sym}-USD-SWAP")
-        r = float(js["data"][0]["fundingRate"])
-        return {"status": "ok", "source": "okx", "rate_8h": r, "annual_pct": r * 3 * 365 * 100}
-    except Exception:
-        pass
-    try:
-        js = _get(f"https://api.bybit.com/v5/market/tickers?category=inverse&symbol={sym}USD")
-        r = float(js["result"]["list"][0]["fundingRate"])
-        return {"status": "ok", "source": "bybit", "rate_8h": r, "annual_pct": r * 3 * 365 * 100}
-    except Exception as e:
-        return {"status": "missing", "reason": str(e)[:80]}
+    for url, path in ((f"https://www.okx.com/api/v5/public/funding-rate?instId={sym}-USD-SWAP", ("data", 0, "fundingRate"), ),
+                      (f"https://api.bybit.com/v5/market/tickers?category=inverse&symbol={sym}USD", ("result", "list", 0, "fundingRate"))):
+        try:
+            js = _get(url)
+            for k in path:
+                js = js[k]
+            r = float(js)
+            return {"status": "ok", "source": url.split("/")[2], "rate_8h": r, "annual_pct": r * 3 * 365 * 100}
+        except Exception:
+            continue
+    return {"status": "missing"}
 
 
 def brakes(etf, btc):
-    """ETF 刹车（只否决新入场/开合约）。ETF 缺失 → []。"""
     if etf.get("status") != "ok":
         return [], None
     tags, regime = [], None
@@ -133,29 +159,41 @@ def fmt(x):
     return "—" if x is None else f"{x:,.0f}"
 
 
-def key_prices(t, position, risk):
-    """v2 规则（2013–2026 回测定版，不随行情改）：
-    空仓·顺势 → 入场=收盘价（不等回踩），失效=EMA50；仓位% = 风险预算% ÷ 距失效%
-    空仓·震荡/逆势 → 无入场；观察位 EMA20，失效 EMA50
-    有仓 → 失效=EMA50；收盘<EMA50 → 「已失效→清仓」。无追踪止损
-    """
+def spot_action(sym, t, cy, position, risk, veto, mode):
+    """返回 (动作文本, 入场价, 失效/参考价, 仓位%)。mode=trend → v2 纯趋势；mode=cycle → v3 周期武装。"""
     if t.get("status") != "ok":
-        return {"entry": None, "invalid": None, "size_pct": None, "note": "K线缺失"}
-    c, e20, e50, rp = t["close"], t["ema20"], t["ema50"], t["risk_pct"]
+        return f"{sym} K线缺失", None, None, None
+    c, e50, rp = t["close"], t["ema50"], t["risk_pct"]
+    below = c < e50
+    size = risk / rp * 100 if rp > 0 else None
+    ph = cy["phase"] if mode == "cycle" else "趋势"
     if position == "long":
-        return {"entry": None, "invalid": e50, "size_pct": None,
-                "note": "已失效→清仓" if c < e50 else "持有"}
-    if t["state"] == "顺势":
-        return {"entry": c, "invalid": e50, "size_pct": risk / rp * 100 if rp > 0 else None, "note": "可入场"}
-    return {"entry": None, "invalid": e50, "size_pct": None, "note": f"未顺势，观察位EMA20 {fmt(e20)}"}
+        if ph == "出场武装期":
+            return (f"{sym} 跌破EMA50→卖出1/3（站回再破再卖，{cy['exit_hard']}硬清仓）" if below
+                    else f"{sym} 持有（出场已武装，{cy['exit_hard']}硬清仓）"), None, e50, None
+        if ph == "熊市等待期":
+            return f"{sym} 清仓（已过硬出场日）", None, e50, None
+        if ph in ("持有累积期", "再入场窗口"):
+            return f"{sym} 持有（周期持有期，趋势出场未武装）", None, e50, None
+        return (f"{sym} 已失效→清仓" if below else f"{sym} 持有"), None, e50, None
+    # 空仓
+    if ph in ("出场武装期", "熊市等待期"):
+        return f"{sym} 无操作（{ph}，{cy['reentry_open']}起可再入场）", None, e50, None
+    if t["state"] != "顺势":
+        tail = f"，{cy['reentry_hard']}硬买回" if ph == "再入场窗口" else ""
+        return f"{sym} 无操作（未顺势{tail}）", None, e50, None
+    if veto:
+        return f"{sym} 无操作（ETF 刹车：{'/'.join(veto)}）", None, e50, None
+    return f"{sym} 可入场（{risk:g}%风险→仓位 {size:.1f}%）", c, e50, size
 
 
-def overlay(t, tags, fr):
-    """1 倍币本位合约层：顺势 且 无 ETF 刹车 且 资金费年化<20% → 可持 1x；否则不持/平掉。"""
+def overlay(t, cy, tags, fr, mode):
     if t.get("status") != "ok":
         return "合约 K线缺失"
+    if mode == "cycle" and not cy["lev_ok"]:
+        return f"合约 不开（周期窗口 {cy['lev_open']} 起）"
     if t["state"] != "顺势":
-        return "合约 不持（未顺势）"
+        return "合约 不持/平掉（未顺势）"
     veto = [x for x in tags if x in ("熊市节奏", "资金过热", "波段末端")]
     if veto:
         return f"合约 不开（ETF 刹车：{'/'.join(veto)}）"
@@ -166,107 +204,96 @@ def overlay(t, tags, fr):
     return f"合约 可持1x（费率年化 {fr['annual_pct']:.0f}%）"
 
 
-def action(btc, eth, kb, ke, tags, position, risk):
-    veto = [x for x in tags if x in ("熊市节奏", "资金过热", "波段末端")]
-    parts = []
-    for sym, t, k in (("BTC", btc, kb), ("ETH", eth, ke)):
-        if t.get("status") != "ok":
-            parts.append(f"{sym} K线缺失")
-        elif position == "long":
-            parts.append(f"{sym} {k['note']}")
-        elif k["note"] == "可入场":
-            if veto:
-                parts.append(f"{sym} 无操作（ETF 刹车：{'/'.join(veto)}）")
-            else:
-                parts.append(f"{sym} 可入场（{risk:g}%风险→仓位 {k['size_pct']:.1f}%）")
-        else:
-            parts.append(f"{sym} 无操作")
-    return "；".join(parts)
-
-
-def reason(btc, eth, etf, tags, fr):
-    ok = [t for t in (btc, eth) if t.get("status") == "ok"]
-    if not ok:
-        tr = "K线缺失"
-    elif all(t["state"] == "顺势" for t in ok):
-        tr = "双币价>EMA20>EMA50，顺势即可入，出场只看收盘破EMA50"
-    elif all(t["state"] == "逆势" for t in ok):
-        tr = "双币价<EMA20<EMA50，无入场条件"
-    else:
-        tr = "趋势不一致/震荡，未触发入场"
-    ef = ("ETF缺失不影响趋势层" if etf.get("status") != "ok"
-          else ("ETF刹车" + "/".join(tags) + "仅否决" if tags else "ETF无刹车"))
-    fund = f"费率年化{fr['annual_pct']:.0f}%" if fr.get("status") == "ok" else "费率缺失"
-    return f"{tr}；{ef}；{fund}。"
-
-
 def render(r):
-    btc, eth, etf, kb, ke = r["btc"], r["eth"], r["etf"], r["key_btc"], r["key_eth"]
+    btc, eth, etf, cy = r["btc"], r["eth"], r["etf"], r["cycle"]
 
     def st(sym, t):
         if t.get("status") != "ok":
             return f"{sym} K线缺失"
-        return f"{sym} {t['state']}（{fmt(t['close'])}/{fmt(t['ema20'])}/{fmt(t['ema50'])}，距失效 {t['risk_pct']:.1f}%）"
-
+        return f"{sym} {t['state']}（{fmt(t['close'])}/{fmt(t['ema20'])}/{fmt(t['ema50'])}，距EMA50 {t['risk_pct']:.1f}%）"
     if etf.get("status") == "ok":
-        d = pd.to_datetime(etf["data_date"])
-        in20 = etf["inflow_days_20"]
-        in20s = f"{in20}/20" if in20 is not None else "样本不足"
-        etf_line = (f"连流 {etf['streak_days']}天{etf['streak_dir']}｜20日 {in20s}｜本周 {etf['week_sum_100m_usd']}亿｜"
-                    f"连续流入 {etf['consec_inflow_weeks']}周｜刹车：{'/'.join(r['brake']) or '无'}"
-                    f"（数据截至 {d.month}月{d.day}日，{etf['source']}）")
+        d = pd.to_datetime(etf["data_date"]); in20 = etf["inflow_days_20"]
+        etf_line = (f"连流 {etf['streak_days']}天{etf['streak_dir']}｜20日 {in20 if in20 is not None else '—'}/20｜本周 {etf['week_sum_100m_usd']}亿｜"
+                    f"连续流入 {etf['consec_inflow_weeks']}周｜刹车：{'/'.join(r['brake']) or '无'}（截至 {d.month}月{d.day}日，{etf['source']}）")
     else:
         etf_line = "ETF 数据缺失（三渠道均失败）｜刹车：无（不估算）"
+    if r["mode"] == "cycle":
+        lev = "开放" if cy["lev_ok"] else f"{cy['lev_open']} 起"
+        cyc_line = (f"减半后 {cy['months']:.1f} 月（{cy['halving']}{'估' if cy['halving_est'] else ''}）｜阶段：{cy['phase']}｜"
+                    f"合约窗口 {lev}｜出场武装 {cy['exit_arm']} / 硬出场 {cy['exit_hard']}｜下一减半≈{cy['next_halving']}（估）")
+    else:
+        cyc_line = "周期层关闭（--mode trend）"
 
     def kp(sym, k):
-        if k["invalid"] is None:
-            return f"{sym} {k['note']}"
-        if k["entry"] is None:
-            return f"{sym} {k['note']} / 失效 {fmt(k['invalid'])}"
-        return f"{sym} 入场 {fmt(k['entry'])} / 失效 {fmt(k['invalid'])}"
-
-    lines = [
-        f"- 状态：{st('BTC', btc)}｜{st('ETH', eth)}",
-        f"- ETF：{etf_line}",
-        f"- 动作：{r['action']}｜{r['overlay']}",
-        f"- 关键价：{kp('BTC', kb)}｜{kp('ETH', ke)}",
-        f"- 理由：{r['reason']}",
-    ]
+        if k[2] is None:
+            return f"{sym} —"
+        return f"{sym} 入场 {fmt(k[1])} / 失效 {fmt(k[2])}" if k[1] else f"{sym} 失效/参考 {fmt(k[2])}"
+    lines = [f"- 状态：{st('BTC', btc)}｜{st('ETH', eth)}",
+             f"- 周期：{cyc_line}",
+             f"- ETF：{etf_line}",
+             f"- 动作：{r['act_btc'][0]}；{r['act_eth'][0]}｜{r['overlay']}",
+             f"- 关键价：{kp('BTC', r['act_btc'])}｜{kp('ETH', r['act_eth'])}",
+             f"- 理由：{r['reason']}"]
     etf_streak = f"{etf['streak_dir']}{etf['streak_days']}天" if etf.get("status") == "ok" else "缺失"
-    in20 = (f"{etf['inflow_days_20']}/20" if etf.get("status") == "ok" and etf["inflow_days_20"] is not None
-            else ("样本不足" if etf.get("status") == "ok" else "缺失"))
-    keyp = f"BTC失效 {fmt(kb['invalid'])}｜ETH失效 {fmt(ke['invalid'])}"
-    log = (f"{r['date']} | BTC{btc.get('state', '缺失')} | ETH{eth.get('state', '缺失')} | {etf_streak} | {in20} | "
-           f"{'/'.join(r['brake']) or '无'} | {r['action']} | {r['overlay']} | {keyp}")
+    in20 = f"{etf['inflow_days_20']}/20" if etf.get("status") == "ok" and etf.get("inflow_days_20") is not None else "缺失"
+    log = (f"{r['date']} | BTC{btc.get('state','缺失')} | ETH{eth.get('state','缺失')} | {etf_streak} | {in20} | "
+           f"{'/'.join(r['brake']) or '无'} | {cy['phase']} H+{cy['months']:.1f} | {r['act_btc'][0]}；{r['act_eth'][0]} | {r['overlay']}")
     return "\n".join(lines) + f"\n日志：{log}"
+
+
+def reason(btc, eth, etf, tags, fr, cy, mode):
+    ok = [t for t in (btc, eth) if t.get("status") == "ok"]
+    if not ok:
+        tr = "K线缺失"
+    elif all(t["state"] == "顺势" for t in ok):
+        tr = "双币价>EMA20>EMA50"
+    elif all(t["state"] == "逆势" for t in ok):
+        tr = "双币价<EMA20<EMA50"
+    else:
+        tr = "趋势不一致/震荡"
+    ph = f"周期{cy['phase']}（{'趋势出场仅在武装期生效' if mode == 'cycle' else '纯趋势'}）"
+    ef = "ETF缺失不影响趋势层" if etf.get("status") != "ok" else ("ETF刹车" + "/".join(tags) + "仅否决" if tags else "ETF无刹车")
+    fund = f"费率年化{fr['annual_pct']:.0f}%" if fr.get("status") == "ok" else "费率缺失"
+    return f"{tr}；{ph}；{ef}；{fund}。"
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--position", choices=["none", "long"], default="none")
     ap.add_argument("--risk", type=float, default=1.0, help="单笔风险预算，占账户%%（默认 1）")
-    ap.add_argument("--json", action="store_true", help="只输出 JSON")
-    ap.add_argument("--out", default=None, help="同时写 latest.md / latest.json 到该目录（供定时任务与简报读取）")
+    ap.add_argument("--mode", choices=["cycle", "trend"], default="cycle", help="cycle=v3 周期武装（默认）；trend=v2 纯趋势")
+    ap.add_argument("--date", default=None, help="覆盖今天日期（周期层测试用）")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--out", default=None, help="写 latest.md / latest.json 并追加 log.csv 到该目录")
     a = ap.parse_args()
-
     btc, eth = trend("BTC"), trend("ETH")
     etf = etf_flow.compute()
     fr = funding("BTC")
+    cy = cycle(a.date)
     tags, regime = brakes(etf, btc)
-    kb, ke = key_prices(btc, a.position, a.risk), key_prices(eth, a.position, a.risk)
-    r = {"date": time.strftime("%Y-%m-%d"), "position": a.position, "risk": a.risk,
-         "btc": btc, "eth": eth, "etf": etf, "funding": fr, "brake": tags, "regime": regime,
-         "key_btc": kb, "key_eth": ke}
-    r["overlay"] = overlay(btc, tags, fr)
-    r["action"] = action(btc, eth, kb, ke, tags, a.position, a.risk)
-    r["reason"] = reason(btc, eth, etf, tags, fr)
+    veto = [x for x in tags if x in ("熊市节奏", "资金过热", "波段末端")]
+    r = {"date": a.date or time.strftime("%Y-%m-%d"), "mode": a.mode, "position": a.position, "risk": a.risk,
+         "btc": btc, "eth": eth, "etf": etf, "funding": fr, "cycle": cy, "brake": tags, "regime": regime}
+    r["act_btc"] = spot_action("BTC", btc, cy, a.position, a.risk, veto, a.mode)
+    r["act_eth"] = spot_action("ETH", eth, cy, a.position, a.risk, veto, a.mode)
+    r["overlay"] = overlay(btc, cy, tags, fr, a.mode)
+    r["reason"] = reason(btc, eth, etf, tags, fr, cy, a.mode)
     text = render(r)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
-        with open(os.path.join(a.out, "latest.md"), "w") as f:
-            f.write(f"# 每日看盘 {r['date']}\n\n{text}\n")
-        with open(os.path.join(a.out, "latest.json"), "w") as f:
-            json.dump(r, f, ensure_ascii=False, default=float)
+        open(os.path.join(a.out, "latest.md"), "w").write(f"# 每日看盘 {r['date']}\n\n{text}\n")
+        json.dump(r, open(os.path.join(a.out, "latest.json"), "w"), ensure_ascii=False, default=float)
+        logp = os.path.join(a.out, "log.csv")
+        row = {"date": r["date"], "btc_close": btc.get("close"), "btc_state": btc.get("state"), "btc_ema50": btc.get("ema50"),
+               "eth_close": eth.get("close"), "eth_state": eth.get("state"),
+               "etf_day": round(etf["latest_total_musd"] / 100, 2) if etf.get("status") == "ok" else None,
+               "etf_in20": etf.get("inflow_days_20") if etf.get("status") == "ok" else None,
+               "etf_week": etf.get("week_sum_100m_usd") if etf.get("status") == "ok" else None,
+               "brake": "/".join(tags), "funding_annual": fr.get("annual_pct"), "cycle_month": round(cy["months"], 1),
+               "phase": cy["phase"], "action_btc": r["act_btc"][0], "action_eth": r["act_eth"][0], "overlay": r["overlay"]}
+        old = pd.read_csv(logp) if os.path.exists(logp) else pd.DataFrame()
+        new = pd.concat([old[old["date"] != r["date"]] if len(old) else old, pd.DataFrame([row])], ignore_index=True)
+        new.to_csv(logp, index=False)
     print(json.dumps(r, ensure_ascii=False, default=float) if a.json else text)
 
 

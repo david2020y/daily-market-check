@@ -1,8 +1,6 @@
 name: daily-market-check
 on:
-  schedule:
-    - cron: "15 0 * * *"        # 每天 UTC 00:15 = 新加坡 08:15（ETF 数据 T+1 已更新，K 线已收盘）
-  workflow_dispatch:
+  workflow_dispatch:   # 定时已关闭：日报/月报由云端 routine 执行，这里只保留手动触发
 permissions:
   contents: write
 jobs:
@@ -14,12 +12,13 @@ jobs:
         with: { python-version: "3.12" }
       - run: pip install pandas numpy
       - run: python3 scripts/daily_check.py --out docs ${{ vars.POSITION == 'long' && '--position long' || '' }} --risk ${{ vars.RISK || '1' }}
+      - run: if [ "$(date -u +%d)" = "01" ]; then python3 scripts/monthly_report.py --month $(date -u -d 'yesterday' +%Y-%m) --log docs/log.csv --out docs; fi
       - name: commit
         run: |
           git config user.name bot && git config user.email bot@users.noreply.github.com
           git add docs && git commit -m "daily $(date -u +%F)" || echo "no change"
           git push
-      - name: telegram (可选，设置 TG_TOKEN / TG_CHAT 两个 secret 后生效)
+      - name: telegram (可选)
         if: ${{ env.TG_TOKEN != '' }}
         env: { TG_TOKEN: "${{ secrets.TG_TOKEN }}", TG_CHAT: "${{ secrets.TG_CHAT }}" }
         run: curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$TG_CHAT" --data-urlencode text@docs/latest.md > /dev/null
