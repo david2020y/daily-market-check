@@ -1,0 +1,78 @@
+//@version=6
+indicator("趋势×周期 v3（EMA20/50 + 牛市支撑带 + 减半周期）", shorttitle="趋势×周期v3", overlay=true, max_lines_count=50)
+
+// ─── ① 均线：只保留系统用到的 4 条 ───
+g1 = "① 均线"
+e20 = ta.ema(close, 20)
+e50 = ta.ema(close, 50)
+showBand = input.bool(true, "显示牛市支撑带（20周SMA/21周EMA）", group=g1)
+show200w = input.bool(false, "显示 200 周 SMA（周期地板）", group=g1)
+w20  = request.security(syminfo.tickerid, "W", ta.sma(close, 20))
+w21  = request.security(syminfo.tickerid, "W", ta.ema(close, 21))
+w200 = request.security(syminfo.tickerid, "W", ta.sma(close, 200))
+plot(e20, "EMA20 入场参考", color=#FFC107, linewidth=1)
+plot(e50, "EMA50 失效线",   color=#E53935, linewidth=3)
+pb1 = plot(showBand ? w20 : na, "20周SMA", color=color.new(#00A86B, 40), linewidth=1)
+pb2 = plot(showBand ? w21 : na, "21周EMA", color=color.new(#00A86B, 40), linewidth=1)
+fill(pb1, pb2, color=color.new(#00A86B, 88), title="牛市支撑带")
+plot(show200w ? w200 : na, "200周SMA", color=#607D8B, linewidth=1, style=plot.style_circles)
+
+// ─── ② 三态变色 K 线（与日报一致）───
+g2 = "② 变色K线"
+kShow = input.bool(true, "启用", group=g2)
+bull = close > e20 and e20 > e50
+bear = close < e20 and e20 < e50
+kCol = bull ? #00A86B : bear ? #212121 : #9E9E9E
+barcolor(kShow ? kCol : na, title="三态K线")
+
+// ─── ③ 周期层：减半日与阶段 ───
+g3 = "③ 减半周期"
+showCycle = input.bool(true, "显示减半竖线与阶段背景", group=g3)
+nextHalv  = input.time(timestamp("2028-04-15 00:00 +0000"), "下一减半（估，每年校正）", group=g3)
+var int[] halv = array.from(timestamp("2012-11-28 00:00 +0000"), timestamp("2016-07-09 00:00 +0000"), timestamp("2020-05-11 00:00 +0000"), timestamp("2024-04-20 00:00 +0000"))
+// 最近一次减半（含估算）
+f_lastHalv() =>
+    int h = na
+    for i = 0 to array.size(halv) - 1
+        if time >= array.get(halv, i)
+            h := array.get(halv, i)
+    if time >= nextHalv
+        h := nextHalv
+    h
+int lastH = f_lastHalv()
+float mSince = na(lastH) ? na : (time - lastH) / (1000.0 * 60 * 60 * 24 * 30.44)
+string phase = na(mSince) ? "—" : mSince >= 15 and mSince < 20 ? "出场武装期" : mSince >= 20 and mSince < 26 ? "熊市等待期" : mSince >= 26 and mSince < 34 ? "再入场窗口" : "持有累积期"
+bool levOK = not na(mSince) and (mSince >= 30 or mSince < 15)
+color phCol = phase == "出场武装期" ? color.new(#E53935, 85) : phase == "再入场窗口" ? color.new(#00A86B, 88) : phase == "熊市等待期" ? color.new(#9E9E9E, 90) : na
+bgcolor(showCycle ? phCol : na, title="阶段背景")
+// 减半竖线
+if showCycle
+    for i = 0 to array.size(halv) - 1
+        int ts = array.get(halv, i)
+        if time >= ts and time[1] < ts
+            line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dashed, width=1)
+    if time >= nextHalv and time[1] < nextHalv
+        line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dotted, width=1)
+
+// ─── ④ 小表：只放日报要用的数字 ───
+g4 = "④ 数据表"
+showTbl = input.bool(true, "显示", group=g4)
+var table t = table.new(position.top_right, 2, 7, border_width=1, frame_width=1, frame_color=#9E9E9E)
+f_cell(int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.small)
+    table.cell(t, 1, r, v, bgcolor=color.new(c, 75), text_color=#000000, text_size=size.small)
+if showTbl and barstate.islast
+    float dist = (close - e50) / close * 100
+    string st = bull ? "顺势" : bear ? "逆势" : "震荡"
+    f_cell(0, "状态", st, bull ? #00A86B : bear ? #D32F2F : #9E9E9E)
+    f_cell(1, "收盘", str.tostring(close, format.mintick), #FFFFFF)
+    f_cell(2, "EMA20", str.tostring(e20, format.mintick), #FFC107)
+    f_cell(3, "EMA50 失效", str.tostring(e50, format.mintick), #E53935)
+    f_cell(4, "距EMA50", (dist >= 0 ? "+" : "") + str.tostring(dist, "#.#") + "%（1%风险→仓位 " + (dist > 0 ? str.tostring(100 / dist, "#.#") + "%" : "—") + "）", dist >= 0 ? #00A86B : #D32F2F)
+    f_cell(5, "周期", na(mSince) ? "—" : "减半后 " + str.tostring(mSince, "#.#") + " 月 · " + phase, phCol)
+    f_cell(6, "合约窗口", levOK ? "开放（需顺势+ETF无刹车+费率<20%）" : "关闭", levOK ? #00A86B : #9E9E9E)
+
+// ─── ⑤ 警报：只有 3 个 ───
+alertcondition(bull and not bull[1], "转顺势", "价>EMA20>EMA50：转顺势")
+alertcondition(bear and not bear[1], "转逆势", "价<EMA20<EMA50：转逆势")
+alertcondition(ta.crossunder(close, e50), "收盘跌破 EMA50", "收盘跌破 EMA50（仅出场武装期执行）")
