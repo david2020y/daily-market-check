@@ -1,9 +1,6 @@
 name: daily-market-check
 on:
-  schedule:
-    - cron: "15 0 * * *"        # 每天 UTC 00:15 = 新加坡 08:15
-    - cron: "30 0 1 * *"        # 每月 1 日 08:30 新加坡：月报
-  workflow_dispatch:
+  workflow_dispatch:   # 定时已关闭：日报/月报由云端 routine 执行，这里只保留手动触发
 permissions:
   contents: write
 jobs:

@@ -9,7 +9,7 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - tradingview/trend_cycle_v3.pine：与日报一致的图表指标
 - research/：回测脚本；docs/：每日产物（latest.md/json、log.csv、monthly-*.md）
 - DECISIONS.md：决策日志（结论 + 证据），改规则前必读
-- .github/workflows/daily.yml：定时任务（若已用 Claude Code Routine，二选一，删掉此文件）
+- .github/workflows/daily.yml：GitHub Actions，定时已关闭、只留手动触发；日报/月报由 Routine 跑，不要重新打开 schedule
 
 ## 已定结论（不要重新推翻，除非有新回测）
 1. 趋势层：顺势 = 价>EMA20>EMA50；入场不等回踩；无 ATR 追踪止损；出场触发 = 收盘 < EMA50
@@ -30,3 +30,4 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - 2026-09-22 从 交易策略工作库/daily-market-check-v3.zip 覆盖仓库（脚本内容无变化），git init 并首次提交；注明 Routine 日报独立于本仓库
 - 2026-09-22 Pine v3 加「下一里程碑」倒计时与「本阶段策略」行（含 H+19 硬清 / H+34 硬买回，按 SKILL 规则文字），纯展示，规则参数未动
 - 2026-09-22 合约窗口下边界 H−18→H−22（LEV_OPEN_PREV 30→26，与再入场窗口同步；回测 H+26～32 等价），同步 SKILL/DECISIONS/脚本/Pine；Pine 加非日线警告；首次跑 daily_check 写 docs/
+- 2026-09-22 合并 GitHub main（david2020y/daily-market-check）：保留远程 daily.yml（Actions 定时已关），其余以本地 v3 为准
