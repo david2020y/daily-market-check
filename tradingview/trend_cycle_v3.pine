@@ -24,12 +24,16 @@ bull = close > e20 and e20 > e50
 bear = close < e20 and e20 < e50
 kCol = bull ? #00A86B : bear ? #212121 : #9E9E9E
 barcolor(kShow ? kCol : na, title="三态K线")
+float dist = (close - e50) / close * 100      // 距EMA50 % = 单笔风险 %，仓位 = 风险预算% ÷ 它
 
 // ─── ③ 周期层：减半日与阶段 ───
 g3 = "③ 减半周期"
 showCycle = input.bool(true, "显示减半竖线与阶段背景", group=g3)
+showMs    = input.bool(true, "标记 H+19 硬清仓（红点线）/ H+34 硬买回（绿点线）", group=g3)
 nextHalv  = input.time(timestamp("2028-04-15 00:00 +0000"), "下一减半（估，每年校正）", group=g3)
 var int[] halv = array.from(timestamp("2012-11-28 00:00 +0000"), timestamp("2016-07-09 00:00 +0000"), timestamp("2020-05-11 00:00 +0000"), timestamp("2024-04-20 00:00 +0000"))
+MONTH_MS = 86400000.0 * 30.44                 // 月长口径与 daily_check.py 的 cycle() 一致
+f_ms(int h, float k) => math.round(h + k * MONTH_MS)
 // 最近一次减半（含估算）
 f_lastHalv() =>
     int h = na
@@ -40,29 +44,85 @@ f_lastHalv() =>
         h := nextHalv
     h
 int lastH = f_lastHalv()
-float mSince = na(lastH) ? na : (time - lastH) / (1000.0 * 60 * 60 * 24 * 30.44)
+float mSince = na(lastH) ? na : (time - lastH) / MONTH_MS
 string phase = na(mSince) ? "—" : mSince >= 15 and mSince < 20 ? "出场武装期" : mSince >= 20 and mSince < 26 ? "熊市等待期" : mSince >= 26 and mSince < 34 ? "再入场窗口" : "持有累积期"
 bool levOK = not na(mSince) and (mSince >= 30 or mSince < 15)
 color phCol = phase == "出场武装期" ? color.new(#E53935, 85) : phase == "再入场窗口" ? color.new(#00A86B, 88) : phase == "熊市等待期" ? color.new(#9E9E9E, 90) : na
 bgcolor(showCycle ? phCol : na, title="阶段背景")
-// 减半竖线
+// 减半竖线 + 硬日期点线
 if showCycle
     for i = 0 to array.size(halv) - 1
         int ts = array.get(halv, i)
         if time >= ts and time[1] < ts
             line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dashed, width=1)
+        if showMs
+            int t19 = f_ms(ts, 19)
+            int t34 = f_ms(ts, 34)
+            if time >= t19 and time[1] < t19
+                line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(#D32F2F, 30), style=line.style_dotted, width=1)
+            if time >= t34 and time[1] < t34
+                line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(#00A86B, 30), style=line.style_dotted, width=1)
     if time >= nextHalv and time[1] < nextHalv
         line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dotted, width=1)
+
+// ─── ③b 下一里程碑 + 本阶段策略（纯展示；规则原文见 SKILL.md「现货」四段）───
+g3b = "③b 策略行"
+posLong = input.string("空仓", "当前持仓（只影响「本阶段策略」行）", options=["空仓", "有多仓"], group=g3b) == "有多仓"
+string nxtLab = "—"
+int nxtTs = na
+if not na(mSince)
+    if mSince < 15
+        nxtLab := "H+15 出场武装"
+        nxtTs := f_ms(lastH, 15)
+    else if mSince < 19
+        nxtLab := "H+19 硬清仓"
+        nxtTs := f_ms(lastH, 19)
+    else if mSince < 20
+        nxtLab := "H+20 进入熊市等待"
+        nxtTs := f_ms(lastH, 20)
+    else if mSince < 26
+        nxtLab := "H+26 再入场窗口开"
+        nxtTs := f_ms(lastH, 26)
+    else if mSince < 30
+        nxtLab := "H+30 合约窗口开"
+        nxtTs := f_ms(lastH, 30)
+    else if mSince < 34
+        nxtLab := "H+34 硬买回"
+        nxtTs := f_ms(lastH, 34)
+    else
+        nxtLab := "下一减半（估）"
+        nxtTs := nextHalv
+float daysLeft = na(nxtTs) ? na : (nxtTs - time) / 86400000.0
+// ETF 刹车与资金费率图上拿不到，可入场/合约仍以日报为准
+bool below = close < e50
+string act = "—"
+if not na(mSince)
+    if posLong
+        if phase == "出场武装期"
+            act := mSince >= 19 ? "硬清仓剩余（已过 H+19）" : below ? "跌破EMA50→卖1/3（站回再破再卖）" : "持有（已武装：收盘破EMA50卖1/3）"
+        else if phase == "熊市等待期"
+            act := "清仓（已过硬出场日）"
+        else
+            act := "持有（周期持有期，破EMA50不卖）"
+    else
+        if phase == "出场武装期" or phase == "熊市等待期"
+            act := "空仓等待（H+26 起可再入场）"
+        else if mSince >= 34
+            act := "硬买回（已过 H+34，不等顺势）"
+        else if not bull
+            act := phase == "再入场窗口" ? "等顺势（H+34 仍空仓则硬买回）" : "无操作（未顺势）"
+        else
+            act := "可入场 1%风险→仓位 " + (dist > 0 ? str.tostring(100 / dist, "#.#") + "%" : "—") + "（需日报 ETF 无刹车）"
+color actCol = str.contains(act, "清仓") or str.contains(act, "卖") ? #D32F2F : str.contains(act, "可入场") or str.contains(act, "买回") ? #00A86B : #9E9E9E
 
 // ─── ④ 小表：只放日报要用的数字 ───
 g4 = "④ 数据表"
 showTbl = input.bool(true, "显示", group=g4)
-var table t = table.new(position.top_right, 2, 7, border_width=1, frame_width=1, frame_color=#9E9E9E)
+var table t = table.new(position.top_right, 2, 9, border_width=1, frame_width=1, frame_color=#9E9E9E)
 f_cell(int r, string k, string v, color c) =>
     table.cell(t, 0, r, k, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.small)
     table.cell(t, 1, r, v, bgcolor=color.new(c, 75), text_color=#000000, text_size=size.small)
 if showTbl and barstate.islast
-    float dist = (close - e50) / close * 100
     string st = bull ? "顺势" : bear ? "逆势" : "震荡"
     f_cell(0, "状态", st, bull ? #00A86B : bear ? #D32F2F : #9E9E9E)
     f_cell(1, "收盘", str.tostring(close, format.mintick), #FFFFFF)
@@ -70,7 +130,9 @@ if showTbl and barstate.islast
     f_cell(3, "EMA50 失效", str.tostring(e50, format.mintick), #E53935)
     f_cell(4, "距EMA50", (dist >= 0 ? "+" : "") + str.tostring(dist, "#.#") + "%（1%风险→仓位 " + (dist > 0 ? str.tostring(100 / dist, "#.#") + "%" : "—") + "）", dist >= 0 ? #00A86B : #D32F2F)
     f_cell(5, "周期", na(mSince) ? "—" : "减半后 " + str.tostring(mSince, "#.#") + " 月 · " + phase, phCol)
-    f_cell(6, "合约窗口", levOK ? "开放（需顺势+ETF无刹车+费率<20%）" : "关闭", levOK ? #00A86B : #9E9E9E)
+    f_cell(6, "合约窗口", levOK ? "开放（需顺势+ETF无刹车+费率<20%）" : na(lastH) ? "关闭" : "关闭（" + str.format_time(f_ms(lastH, 30), "yyyy-MM-dd", "UTC") + " 起）", levOK ? #00A86B : #9E9E9E)
+    f_cell(7, "下一里程碑", na(nxtTs) ? "—" : nxtLab + " " + str.format_time(nxtTs, "yyyy-MM-dd", "UTC") + "（" + str.tostring(daysLeft, "#") + " 天后）", #FFFFFF)
+    f_cell(8, "本阶段策略", act, actCol)
 
 // ─── ⑤ 警报：只有 3 个 ───
 alertcondition(bull and not bull[1], "转顺势", "价>EMA20>EMA50：转顺势")
