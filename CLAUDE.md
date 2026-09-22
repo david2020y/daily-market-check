@@ -6,7 +6,7 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 
 ## 目录
 - scripts/daily_check.py：日报（六行结论 + log.csv）；scripts/monthly_report.py：月报；scripts/etf_flow.py：ETF 数据
-- tradingview/trend_cycle_v3.pine：与日报一致的图表指标
+- tradingview/trend_cycle_v3.pine：与日报一致的图表指标；tradingview/etf_proxy_v1.pine：副图 ETF 先行代理（Coinbase 溢价/IBIT 量比/CME 基差，仅参考不做信号）
 - research/：回测脚本；docs/：每日产物（latest.md/json、log.csv、monthly-*.md）
 - DECISIONS.md：决策日志（结论 + 证据），改规则前必读
 - .github/workflows/daily.yml：GitHub Actions，定时已关闭、只留手动触发；日报/月报由 Routine 跑，不要重新打开 schedule
@@ -31,3 +31,4 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - 2026-09-22 Pine v3 加「下一里程碑」倒计时与「本阶段策略」行（含 H+19 硬清 / H+34 硬买回，按 SKILL 规则文字），纯展示，规则参数未动
 - 2026-09-22 合约窗口下边界 H−18→H−22（LEV_OPEN_PREV 30→26，与再入场窗口同步；回测 H+26～32 等价），同步 SKILL/DECISIONS/脚本/Pine；Pine 加非日线警告；首次跑 daily_check 写 docs/
 - 2026-09-22 合并 GitHub main（david2020y/daily-market-check）：保留远程 daily.yml（Actions 定时已关），其余以本地 v3 为准
+- 2026-09-22 新增 tradingview/etf_proxy_v1.pine：盘中 ETF 净流代理 + 距资金过热阈值，纯展示，不进规则
