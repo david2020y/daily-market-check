@@ -32,3 +32,4 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - 2026-09-22 合约窗口下边界 H−18→H−22（LEV_OPEN_PREV 30→26，与再入场窗口同步；回测 H+26～32 等价），同步 SKILL/DECISIONS/脚本/Pine；Pine 加非日线警告；首次跑 daily_check 写 docs/
 - 2026-09-22 合并 GitHub main（david2020y/daily-market-check）：保留远程 daily.yml（Actions 定时已关），其余以本地 v3 为准
 - 2026-09-22 新增 tradingview/etf_proxy_v1.pine：盘中 ETF 净流代理 + 距资金过热阈值，纯展示，不进规则
+- 2026-09-23 Pine v3 颜色/线宽全部改为设置项（减半线、H+19/H+34 线、阶段背景、均线、K 线），默认加深加粗；etf_proxy 加窗格提示

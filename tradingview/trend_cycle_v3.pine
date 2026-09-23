@@ -1,6 +1,25 @@
 //@version=6
 indicator("趋势×周期 v3（EMA20/50 + 牛市支撑带 + 减半周期）", shorttitle="趋势×周期v3", overlay=true, max_lines_count=50)
 
+// ─── ⓪ 颜色与线宽（全部可在设置里改；只影响显示，不影响判断）───
+g0 = "⓪ 颜色与线宽"
+cE20    = input.color(#FFC107, "EMA20",        group=g0, inline="a")
+cE50    = input.color(#E53935, "EMA50",        group=g0, inline="a")
+cBand   = input.color(#00A86B, "牛市支撑带",   group=g0, inline="b")
+c200    = input.color(#607D8B, "200周SMA",     group=g0, inline="b")
+cBull   = input.color(#00A86B, "顺势K",        group=g0, inline="c")
+cBear   = input.color(#212121, "逆势K",        group=g0, inline="c")
+cRange  = input.color(#9E9E9E, "震荡K",        group=g0, inline="c")
+cHalv   = input.color(#5E35B1, "减半竖线",     group=g0, inline="d")
+cNext   = input.color(#5E35B1, "下一减半(估)", group=g0, inline="d")
+cH19    = input.color(#D32F2F, "H+19 硬清仓线", group=g0, inline="e")
+cH34    = input.color(#2E7D32, "H+34 硬买回线", group=g0, inline="e")
+cBgArm  = input.color(#E53935, "武装期背景",   group=g0, inline="f")
+cBgRe   = input.color(#00A86B, "再入场背景",   group=g0, inline="f")
+cBgBear = input.color(#9E9E9E, "熊市等待背景", group=g0, inline="f")
+bgT     = input.int(80, "背景透明度（0 实 → 100 透明）", minval=0, maxval=100, group=g0)
+lnW     = input.int(2,  "竖线宽度", minval=1, maxval=4, group=g0)
+
 // ─── ① 均线：只保留系统用到的 4 条 ───
 g1 = "① 均线"
 e20 = ta.ema(close, 20)
@@ -10,19 +29,19 @@ show200w = input.bool(false, "显示 200 周 SMA（周期地板）", group=g1)
 w20  = request.security(syminfo.tickerid, "W", ta.sma(close, 20))
 w21  = request.security(syminfo.tickerid, "W", ta.ema(close, 21))
 w200 = request.security(syminfo.tickerid, "W", ta.sma(close, 200))
-plot(e20, "EMA20 入场参考", color=#FFC107, linewidth=1)
-plot(e50, "EMA50 失效线",   color=#E53935, linewidth=3)
-pb1 = plot(showBand ? w20 : na, "20周SMA", color=color.new(#00A86B, 40), linewidth=1)
-pb2 = plot(showBand ? w21 : na, "21周EMA", color=color.new(#00A86B, 40), linewidth=1)
-fill(pb1, pb2, color=color.new(#00A86B, 88), title="牛市支撑带")
-plot(show200w ? w200 : na, "200周SMA", color=#607D8B, linewidth=1, style=plot.style_circles)
+plot(e20, "EMA20 入场参考", color=cE20, linewidth=1)
+plot(e50, "EMA50 失效线",   color=cE50, linewidth=3)
+pb1 = plot(showBand ? w20 : na, "20周SMA", color=color.new(cBand, 40), linewidth=1)
+pb2 = plot(showBand ? w21 : na, "21周EMA", color=color.new(cBand, 40), linewidth=1)
+fill(pb1, pb2, color=color.new(cBand, 88), title="牛市支撑带")
+plot(show200w ? w200 : na, "200周SMA", color=c200, linewidth=1, style=plot.style_circles)
 
 // ─── ② 三态变色 K 线（与日报一致）───
 g2 = "② 变色K线"
 kShow = input.bool(true, "启用", group=g2)
 bull = close > e20 and e20 > e50
 bear = close < e20 and e20 < e50
-kCol = bull ? #00A86B : bear ? #212121 : #9E9E9E
+kCol = bull ? cBull : bear ? cBear : cRange
 bool isDaily = timeframe.isdaily and timeframe.multiplier == 1   // 1D 图；不用 period=="D"，TradingView 可能返回 "1D"
 barcolor(kShow and isDaily ? kCol : na, title="三态K线")
 float dist = (close - e50) / close * 100      // 距EMA50 % = 单笔风险 %，仓位 = 风险预算% ÷ 它
@@ -48,23 +67,23 @@ int lastH = f_lastHalv()
 float mSince = na(lastH) ? na : (time - lastH) / MONTH_MS
 string phase = na(mSince) ? "—" : mSince >= 15 and mSince < 20 ? "出场武装期" : mSince >= 20 and mSince < 26 ? "熊市等待期" : mSince >= 26 and mSince < 34 ? "再入场窗口" : "持有累积期"
 bool levOK = not na(mSince) and (mSince >= 26 or mSince < 15)   // 合约窗口 [H−22, H+15]，下边界与再入场窗口同步
-color phCol = phase == "出场武装期" ? color.new(#E53935, 85) : phase == "再入场窗口" ? color.new(#00A86B, 88) : phase == "熊市等待期" ? color.new(#9E9E9E, 90) : na
+color phCol = phase == "出场武装期" ? color.new(cBgArm, bgT) : phase == "再入场窗口" ? color.new(cBgRe, bgT) : phase == "熊市等待期" ? color.new(cBgBear, bgT) : na
 bgcolor(showCycle ? phCol : na, title="阶段背景")
 // 减半竖线 + 硬日期点线
 if showCycle
     for i = 0 to array.size(halv) - 1
         int ts = array.get(halv, i)
         if time >= ts and time[1] < ts
-            line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dashed, width=1)
+            line.new(bar_index, low, bar_index, high, extend=extend.both, color=cHalv, style=line.style_dashed, width=lnW)
         if showMs
             int t19 = f_ms(ts, 19)
             int t34 = f_ms(ts, 34)
             if time >= t19 and time[1] < t19
-                line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(#D32F2F, 30), style=line.style_dotted, width=1)
+                line.new(bar_index, low, bar_index, high, extend=extend.both, color=cH19, style=line.style_dotted, width=lnW)
             if time >= t34 and time[1] < t34
-                line.new(bar_index, low, bar_index, high, extend=extend.both, color=color.new(#00A86B, 30), style=line.style_dotted, width=1)
+                line.new(bar_index, low, bar_index, high, extend=extend.both, color=cH34, style=line.style_dotted, width=lnW)
     if time >= nextHalv and time[1] < nextHalv
-        line.new(bar_index, low, bar_index, high, extend=extend.both, color=#7E57C2, style=line.style_dotted, width=1)
+        line.new(bar_index, low, bar_index, high, extend=extend.both, color=cNext, style=line.style_dotted, width=lnW)
 
 // ─── ③b 下一里程碑 + 本阶段策略（纯展示；规则原文见 SKILL.md「现货」四段）───
 g3b = "③b 策略行"

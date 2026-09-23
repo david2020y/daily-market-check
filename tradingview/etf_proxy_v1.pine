@@ -2,6 +2,7 @@
 // ETF 先行代理 v1：美股盘中就能看到的三个「净流入」代理 + 与「资金过热」刹车的距离。
 // 只是参考，不是规则：ETF 只做刹车（见 SKILL.md），本指标不产生任何入场信号。
 // 用法：加到 BTC 日线图上，显示在副图；「本周累计流入」从日报 ETF 行手填。
+// 若它出现在主图（价格轴出现负数、有零线横穿），是实例挂错窗格：从图上删掉它，再在编辑器里重新「添加到图表」即可落到副图。
 indicator("ETF 先行代理 v1（Coinbase溢价 / IBIT量比 / CME基差）", shorttitle="ETF代理v1", overlay=false, format=format.price, precision=2)
 
 // ─── ① 品种（在你的 TradingView 上若代码不同，改这里）───
