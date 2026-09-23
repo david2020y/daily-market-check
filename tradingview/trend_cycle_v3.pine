@@ -155,6 +155,30 @@ if showTbl and barstate.islast and isDaily
     f_cell(7, "下一里程碑", na(nxtTs) ? "—" : nxtLab + " " + str.format_time(nxtTs, "yyyy-MM-dd", "UTC") + "（" + str.tostring(daysLeft, "#") + " 天后）", #FFFFFF)
     f_cell(8, "本阶段策略", act, actCol)
 
+// ─── ⑥ 图例：哪条线 / 哪种背景 / 哪种 K 线颜色 对应什么（左下角，可关）───
+g6 = "⑥ 图例"
+showLeg = input.bool(true, "显示图例（左下角）", group=g6)
+var table lg = table.new(position.bottom_left, 2, 12, border_width=1, frame_width=1, frame_color=#9E9E9E)
+f_leg(int r, color c, string glyph, string txt, bool isBg) =>
+    if isBg
+        table.cell(lg, 0, r, glyph, bgcolor=color.new(c, 60), text_color=#000000, text_size=size.tiny)
+    else
+        table.cell(lg, 0, r, glyph, bgcolor=#263238, text_color=c, text_size=size.tiny)
+    table.cell(lg, 1, r, txt, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.tiny, text_halign=text.align_left)
+if showLeg and barstate.islast
+    f_leg(0,  cE20,   "———",   "EMA20（日）细线 · 入场参考；价 > EMA20 > EMA50 = 顺势", false)
+    f_leg(1,  cE50,   "▬▬▬",   "EMA50（日）粗线 · 失效线；收盘跌破 = 出场触发，只在武装期执行", false)
+    f_leg(2,  cBand,  "▒▒▒",   "牛市支撑带 · 20周SMA 与 21周EMA 之间的色带，只作背景参照", false)
+    f_leg(3,  c200,   "○○○",   "200周SMA 圆点 · 周期地板，默认关闭，熊市时打开看", false)
+    f_leg(4,  cHalv,  "– – –", "减半日 竖虚线 · 已发生 4 次", false)
+    f_leg(5,  cNext,  "· · ·", "下一减半（估）竖点线 · 每年月报校正一次", false)
+    f_leg(6,  cH19,   "· · ·", "H+19 硬清仓 竖点线 · 武装期内到此日剩余全清", false)
+    f_leg(7,  cH34,   "· · ·", "H+34 硬买回 竖点线 · 再入场窗口末仍空仓则买回", false)
+    f_leg(8,  cBgArm, "背景",  "出场武装期 H+15–20 · 每次收盘破 EMA50 卖 1/3", true)
+    f_leg(9,  cBgRe,  "背景",  "再入场窗口 H+26–34 · 顺势可买；合约窗口同步开放", true)
+    f_leg(10, cBgBear,"背景",  "熊市等待期 H+20–26 · 有仓清仓，空仓等 H+26", true)
+    f_leg(11, cBull,  "K线",   "K 线颜色：顺势 / 逆势 / 震荡（三色见「⓪ 颜色」）", false)
+
 // ─── ⑤ 警报：只有 3 个 ───
 alertcondition(isDaily and bull and not bull[1], "转顺势", "价>EMA20>EMA50：转顺势")
 alertcondition(isDaily and bear and not bear[1], "转逆势", "价<EMA20<EMA50：转逆势")

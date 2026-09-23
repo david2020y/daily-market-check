@@ -66,3 +66,16 @@ if showTbl and barstate.islast
     f_cell(3, "距 50 日高", str.tostring(distHi, "#.#") + "%" + (nearHi ? "（<10%，本周 >25 亿即资金过热）" : "（≥10%，本周不会触发资金过热）"), nearHi ? #FFC107 : #FFFFFF)
     f_cell(4, "本周累计（手填）", str.tostring(weekIn, "#.##") + " / 25 亿" + (overheat ? " → 资金过热：否决新入场/新开合约" : nearHi ? "，还差 " + str.tostring(brakeWk - weekIn, "#.##") + " 亿" : ""), overheat ? #D32F2F : #FFFFFF)
     f_cell(5, "美国盘倾向", lean + "（仅参考，不是规则；ETF 只否决不发起）", leanCol)
+
+// ─── ⑦ 图例（左下角，可关）───
+showLeg = input.bool(true, "显示图例（左下角）", group=g3)
+var table lg = table.new(position.bottom_left, 2, 4, border_width=1, frame_width=1, frame_color=#9E9E9E)
+f_leg(int r, color c, string glyph, string txt) =>
+    table.cell(lg, 0, r, glyph, bgcolor=#263238, text_color=c, text_size=size.tiny)
+    table.cell(lg, 1, r, txt, bgcolor=#455A64, text_color=#FFFFFF, text_size=size.tiny, text_halign=text.align_left)
+if showLeg and barstate.islast
+    f_leg(0, #00A86B, "▮▮▮",   "柱 · Coinbase 溢价 %（绿正 = 美国盘买盘，红负 = 卖盘）")
+    f_leg(1, #FFC107, "———",   "黄线 · 溢价 5 日均")
+    f_leg(2, #7E57C2, "▬▬▬",   "紫线 · CME 近月基差 %（走阔多为套利盘）")
+    f_leg(3, #9E9E9E, "· · ·", "点线 · ±溢价阈值（默认 0.10%）")
+
