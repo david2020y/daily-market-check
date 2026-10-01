@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""每日看盘一键脚本：趋势层(BTC/ETH 日线) + ETF 刹车层 → 五行结论 + 日志行。
+"""每日看盘一键脚本：趋势层(BTC/ETH 日线) + ETF 刹车层 → 一句话结论 + 六个小节（手机友好）。
 用法:
   python3 daily_check.py                       # 空仓
   python3 daily_check.py --position long       # 有多仓（只看收盘是否破 EMA50）
@@ -205,43 +205,52 @@ def overlay(t, cy, tags, fr, mode):
 
 
 def render(r):
+    """手机友好格式：一句话结论在最前，六个小节（动作/关键价/状态/周期/ETF/理由）每项一行。"""
     btc, eth, etf, cy = r["btc"], r["eth"], r["etf"], r["cycle"]
+    item = lambda s: "- " + s.replace(" ", "：", 1)          # "BTC 持有（…）" → "- BTC：持有（…）"
+    main_ = lambda s: s.split("（")[0]                         # 去括号说明，只留结论
 
     def st(sym, t):
         if t.get("status") != "ok":
-            return f"{sym} K线缺失"
-        return f"{sym} {t['state']}（{fmt(t['close'])}/{fmt(t['ema20'])}/{fmt(t['ema50'])}，距EMA50 {t['risk_pct']:.1f}%）"
-    if etf.get("status") == "ok":
-        d = pd.to_datetime(etf["data_date"]); in20 = etf["inflow_days_20"]
-        etf_line = (f"连流 {etf['streak_days']}天{etf['streak_dir']}｜20日 {in20 if in20 is not None else '—'}/20｜本周 {etf['week_sum_100m_usd']}亿｜"
-                    f"连续流入 {etf['consec_inflow_weeks']}周｜刹车：{'/'.join(r['brake']) or '无'}（截至 {d.month}月{d.day}日，{etf['source']}）")
-    else:
-        etf_line = "ETF 数据缺失（三渠道均失败）｜刹车：无（不估算）"
-    if r["mode"] == "cycle":
-        lev = "开放" if cy["lev_ok"] else f"{cy['lev_open']} 起"
-        cyc_line = (f"减半后 {cy['months']:.1f} 月（{cy['halving']}{'估' if cy['halving_est'] else ''}）｜阶段：{cy['phase']}｜"
-                    f"合约窗口 {lev}｜出场武装 {cy['exit_arm']} / 硬出场 {cy['exit_hard']}｜下一减半≈{cy['next_halving']}（估）")
-    else:
-        cyc_line = "周期层关闭（--mode trend）"
+            return f"- {sym}：K线缺失"
+        return (f"- {sym} {t['state']}：收盘 {fmt(t['close'])}｜EMA20 {fmt(t['ema20'])}｜"
+                f"EMA50 {fmt(t['ema50'])}｜距EMA50 {t['risk_pct']:.1f}%")
 
     def kp(sym, k):
         if k[2] is None:
-            return f"{sym} —"
-        return f"{sym} 入场 {fmt(k[1])} / 失效 {fmt(k[2])}" if k[1] else f"{sym} 失效/参考 {fmt(k[2])}"
-    lines = [f"- 状态：{st('BTC', btc)}｜{st('ETH', eth)}",
-             f"- 周期：{cyc_line}",
-             f"- ETF：{etf_line}",
-             f"- 动作：{r['act_btc'][0]}；{r['act_eth'][0]}｜{r['overlay']}",
-             f"- 关键价：{kp('BTC', r['act_btc'])}｜{kp('ETH', r['act_eth'])}",
-             f"- 理由：{r['reason']}"]
-    etf_streak = f"{etf['streak_dir']}{etf['streak_days']}天" if etf.get("status") == "ok" else "缺失"
-    in20 = f"{etf['inflow_days_20']}/20" if etf.get("status") == "ok" and etf.get("inflow_days_20") is not None else "缺失"
-    log = (f"{r['date']} | BTC{btc.get('state','缺失')} | ETH{eth.get('state','缺失')} | {etf_streak} | {in20} | "
-           f"{'/'.join(r['brake']) or '无'} | {cy['phase']} H+{cy['months']:.1f} | {r['act_btc'][0]}；{r['act_eth'][0]} | {r['overlay']}")
-    return "\n".join(lines) + f"\n日志：{log}"
+            return f"- {sym}：—"
+        return f"- {sym}：入场 {fmt(k[1])}｜失效 {fmt(k[2])}" if k[1] else f"- {sym}：失效/参考 {fmt(k[2])}"
+
+    if r["mode"] == "cycle":
+        lev = "开放" if cy["lev_ok"] else f"{cy['lev_open']} 起"
+        cyc = [f"- 阶段：{cy['phase']}（减半后 {cy['months']:.1f} 月，减半日 {cy['halving']}{'（估）' if cy['halving_est'] else ''}）",
+               f"- 合约窗口：{lev}",
+               f"- 出场武装：{cy['exit_arm']}｜硬出场：{cy['exit_hard']}",
+               f"- 下一减半：≈{cy['next_halving']}（估）"]
+    else:
+        cyc = ["- 周期层关闭（--mode trend）"]
+    if etf.get("status") == "ok":
+        d = pd.to_datetime(etf["data_date"]); in20 = etf["inflow_days_20"]
+        etf_l = [f"- 刹车：{'/'.join(r['brake']) or '无'}",
+                 f"- 连续 {etf['streak_days']} 天{etf['streak_dir']}｜近 20 日 {in20 if in20 is not None else '—'}/20 天流入",
+                 f"- 本周 {etf['week_sum_100m_usd']} 亿美元｜连续流入 {etf['consec_inflow_weeks']} 周",
+                 f"- 数据截至 {d.month}月{d.day}日（{etf['source']}）"]
+    else:
+        etf_l = ["- ETF 数据缺失（三渠道均失败）｜刹车：无（不估算）"]
+
+    acts = [r["act_btc"][0], r["act_eth"][0], r["overlay"]]
+    out = [f"**今日结论：{'｜'.join(main_(a) for a in acts)}**",
+           "", "### 动作", *[item(a) for a in acts],
+           "", "### 关键价", kp("BTC", r["act_btc"]), kp("ETH", r["act_eth"]),
+           "", "### 状态", st("BTC", btc), st("ETH", eth),
+           "", "### 周期", *cyc,
+           "", "### ETF", *etf_l,
+           "", "### 理由", *[f"- {k}：{v}" for k, v in r["reason_items"]]]
+    return "\n".join(out)
 
 
 def reason(btc, eth, etf, tags, fr, cy, mode):
+    """返回 [(小节, 说明)]，顺序固定：趋势 / 周期 / ETF / 费率。"""
     ok = [t for t in (btc, eth) if t.get("status") == "ok"]
     if not ok:
         tr = "K线缺失"
@@ -251,10 +260,10 @@ def reason(btc, eth, etf, tags, fr, cy, mode):
         tr = "双币价<EMA20<EMA50"
     else:
         tr = "趋势不一致/震荡"
-    ph = f"周期{cy['phase']}（{'趋势出场仅在武装期生效' if mode == 'cycle' else '纯趋势'}）"
-    ef = "ETF缺失不影响趋势层" if etf.get("status") != "ok" else ("ETF刹车" + "/".join(tags) + "仅否决" if tags else "ETF无刹车")
-    fund = f"费率年化{fr['annual_pct']:.0f}%" if fr.get("status") == "ok" else "费率缺失"
-    return f"{tr}；{ph}；{ef}；{fund}。"
+    ph = f"{cy['phase']}（{'趋势出场仅在武装期生效' if mode == 'cycle' else '纯趋势'}）"
+    ef = "数据缺失，不影响趋势层" if etf.get("status") != "ok" else ("刹车" + "/".join(tags) + "，仅否决新开" if tags else "无刹车")
+    fund = f"年化 {fr['annual_pct']:.0f}%" if fr.get("status") == "ok" else "缺失（合约不开新单）"
+    return [("趋势", tr), ("周期", ph), ("ETF", ef), ("费率", fund)]
 
 
 def main():
@@ -277,7 +286,8 @@ def main():
     r["act_btc"] = spot_action("BTC", btc, cy, a.position, a.risk, veto, a.mode)
     r["act_eth"] = spot_action("ETH", eth, cy, a.position, a.risk, veto, a.mode)
     r["overlay"] = overlay(btc, cy, tags, fr, a.mode)
-    r["reason"] = reason(btc, eth, etf, tags, fr, cy, a.mode)
+    r["reason_items"] = reason(btc, eth, etf, tags, fr, cy, a.mode)
+    r["reason"] = "；".join(f"{k}：{v}" for k, v in r["reason_items"])
     text = render(r)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
