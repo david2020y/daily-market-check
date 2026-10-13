@@ -5,6 +5,7 @@ David 的 BTC/ETH 看盘系统 v3：日报脚本、月报脚本、TradingView �
 Routine 日报是另一套东西、独立运行，本仓库不负责也不改动它；本仓库只做 TradingView 上的详细分析（指标 + 回测）。
 
 ## 目录
+- David 本机副本：/Users/willmax/Documents/个人系统/交易策略工作库/daily-market-check（唯一本地路径；旧路径 ~/Documents/交易策略工作库 已废弃，任何任务都不要再往那里读写或创建文件）
 - scripts/daily_check.py：日报（六行结论 + log.csv）；scripts/monthly_report.py：月报；scripts/etf_flow.py：ETF 数据
 - tradingview/trend_cycle_v3.pine：与日报一致的图表指标；tradingview/etf_proxy_v1.pine：副图 ETF 先行代理（Coinbase 溢价/IBIT 量比/CME 基差，仅参考不做信号）
 - research/：回测脚本；docs/：每日产物（latest.md/json、log.csv、monthly-*.md）
@@ -27,7 +28,7 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 ## 变更记录
 - 2026-09-22 v1→v2：去等回踩、去 2ATR 止损、加仓位公式与费率门槛
 - 2026-09-22 v2→v3：加周期层、log.csv、月报、TradingView v3 指标
-- 2026-09-22 从 交易策略工作库/daily-market-check-v3.zip 覆盖仓库（脚本内容无变化），git init 并首次提交；注明 Routine 日报独立于本仓库
+- 2026-09-22 从 交易策略工作库/daily-market-check-v3.zip（当时在旧路径）覆盖仓库（脚本内容无变化），git init 并首次提交；注明 Routine 日报独立于本仓库
 - 2026-09-22 Pine v3 加「下一里程碑」倒计时与「本阶段策略」行（含 H+19 硬清 / H+34 硬买回，按 SKILL 规则文字），纯展示，规则参数未动
 - 2026-09-22 合约窗口下边界 H−18→H−22（LEV_OPEN_PREV 30→26，与再入场窗口同步；回测 H+26～32 等价），同步 SKILL/DECISIONS/脚本/Pine；Pine 加非日线警告；首次跑 daily_check 写 docs/
 - 2026-09-22 合并 GitHub main（david2020y/daily-market-check）：保留远程 daily.yml（Actions 定时已关），其余以本地 v3 为准
@@ -35,3 +36,4 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - 2026-09-23 Pine v3 颜色/线宽全部改为设置项（减半线、H+19/H+34 线、阶段背景、均线、K 线），默认加深加粗；etf_proxy 加窗格提示
 - 2026-09-23 两个 Pine 各加左下角图例（线/背景/K 线颜色对应什么），可关
 - 2026-10-01 日报输出改为手机友好格式：一句话结论 + 动作/关键价/状态/周期/ETF/理由六个小节（每项一行），日志行移出 latest.md（log.csv 不变）；规则与数字未动，同步 SKILL.md 输出格式
+- 2026-10-13 本机路径统一为 /Users/willmax/Documents/个人系统/交易策略工作库/daily-market-check，废弃旧路径 ~/Documents/交易策略工作库
