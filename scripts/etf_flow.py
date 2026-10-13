@@ -35,6 +35,8 @@ def _curl(url, extra=(), timeout=40, accept="text/html,application/json"):
                          "-H", f"Accept: {accept}", "-H", "Accept-Language: en-US,en;q=0.9",
                          *extra, "-w", "\n%{http_code}", url], capture_output=True, text=True)
     body, _, code = cp.stdout.rpartition("\n")
+    if cp.returncode != 0:                            # 超时/中途断开：curl 仍可能打印 200，按失败处理
+        return body, f"curl{cp.returncode}"
     return body, code.strip()
 
 
@@ -53,43 +55,65 @@ def _parse_farside(body):
 
 
 _DATE_RE = re.compile(r"^\d{2} [A-Z][a-z]{2} \d{4}$")
-_CELL_RE = re.compile(r"^(-|\(?-?[\d,]+(\.\d+)?\)?)$")
+_CELL_RE = re.compile(r"^(-|\(?-?(\d{1,3}(,\d{3})+|\d+)(\.\d+)?\)?)$")   # 「-」或数字；括号必须成对（下面再查）
+
+
+def _cell(v):
+    """一个基金/Total 格子 → float（「-」= NaN）；不合规（含半截数字、括号不成对）抛异常。"""
+    v = v.strip()
+    if not _CELL_RE.match(v) or v.startswith("(") != v.endswith(")"):
+        raise ValueError(f"格子不合规: {v!r}")
+    return num(v)
 
 
 def _parse_farside_text(txt):
-    """解析 r.jina.ai 转出的 Farside 表。两种排版都认：markdown 竖线表（/btc/ 页）和每格一行（全量页）。
-    日期后面连续的数字格 = 各基金 + 最后一格 Total；基金全是「-」的休市行跳过。
-    每行校验「各基金之和 ≈ Total」，任何一行对不上就整张作废（抛异常，走下一个渠道），不猜。"""
-    toks = []
-    for line in txt.splitlines():
-        if line.lstrip().startswith("|"):
-            toks.extend(c.strip() for c in line.strip().strip("|").split("|"))
-        else:
-            toks.extend(c.strip() for c in line.split("\t"))
-    rows, i = {}, 0
-    while i < len(toks):
-        if not _DATE_RE.match(toks[i]):
-            i += 1
+    """解析 r.jina.ai 转出的 Farside 表（markdown 竖线表；没有竖线表时认「每格一行」排版）。
+    必须有含 IBIT 的表头（定列数）和表尾「Total」汇总行（防截断）；每个日期行格数必须等于表头列数。
+    跳过：基金全是「-」的休市行、IBIT 为「-」的当日未报完行、Total 为 0 的行。
+    每行校验「各基金之和 ≈ Total」。任何一处不合规就整张作废（抛异常，走下一个渠道），不猜。"""
+    pipe = [l.strip() for l in txt.splitlines() if l.strip().startswith("|")]
+    if pipe:
+        table = [[c.strip() for c in l.strip("|").split("|")] for l in pipe]
+    else:                                              # 每格一行：按表头列数把记号切成行
+        toks = [c.strip() for l in txt.splitlines() for c in l.split("\t") if c.strip()]
+        if "Date" not in toks or "IBIT" not in toks:
+            return pd.DataFrame(columns=["Date", "Total"])
+        h0 = toks.index("Date")
+        h1 = toks.index("Total", h0)
+        width = h1 - h0 + 1
+        table, i = [toks[h0:h1 + 1]], h1 + 1
+        while i < len(toks):
+            table.append(toks[i:i + width] if _DATE_RE.match(toks[i]) else toks[i:i + 1])
+            i += width if _DATE_RE.match(toks[i]) else 1
+    head = next((r for r in table if "IBIT" in r), None)
+    if head is None:
+        return pd.DataFrame(columns=["Date", "Total"])  # 不是 Farside 表（如 Cloudflare 挑战页）→ 0 行
+    width, ibit = len(head), head.index("IBIT")
+    rows, last_date_pos, footer_pos = {}, None, None
+    for pos, r in enumerate(table):
+        if r and r[0] == "Total" and r is not head:
+            footer_pos = pos
+            break
+        if not r or not _DATE_RE.match(r[0]):
             continue
-        d, vals, i = toks[i], [], i + 1
-        while i < len(toks) and not _DATE_RE.match(toks[i]):
-            if toks[i] == "":                          # 空格子/空行：跳过，遇到下一个日期或非数字文字才算本行结束
-                i += 1
-                continue
-            if not _CELL_RE.match(toks[i]):
-                break
-            vals.append(toks[i])
-            i += 1
-        if len(vals) < 2:
+        if len(r) != width:
+            raise ValueError(f"Farside 文本 {r[0]} 有 {len(r)} 格，表头 {width} 格")
+        last_date_pos = pos
+        funds, total = r[1:-1], r[-1]
+        vals = [_cell(v) if v else np.nan for v in funds]
+        if all(np.isnan(vals)) or not funds[ibit - 1] or funds[ibit - 1] == "-":
+            continue                                   # 休市行 / IBIT 还没报（当日未完成）
+        tot = _cell(total)
+        if not math.isfinite(tot):
+            raise ValueError(f"Farside 文本 {r[0]} Total 不是数字: {total!r}")
+        s = float(np.nansum(vals))
+        if abs(s - tot) > SUM_TOL:
+            raise ValueError(f"Farside 文本 {r[0]} 各基金之和 {s:.1f} ≠ Total {total}")
+        if tot == 0:
             continue
-        funds, total = vals[:-1], vals[-1]
-        if all(v == "-" for v in funds):               # 休市行
-            continue
-        tot = num(total)
-        s = sum(num(v) for v in funds if v != "-")
-        if not math.isfinite(tot) or abs(s - tot) > SUM_TOL:
-            raise ValueError(f"Farside 文本 {d} 各基金之和 {s:.1f} ≠ Total {total}")
-        rows[pd.to_datetime(d, format="%d %b %Y")] = tot
+        rows[pd.to_datetime(r[0], format="%d %b %Y")] = tot
+    if last_date_pos is not None and (footer_pos is None or footer_pos < last_date_pos):
+        raise ValueError("Farside 文本没有表尾 Total 行，可能被截断")
     return pd.DataFrame(sorted(rows.items()), columns=["Date", "Total"])
 
 
@@ -107,7 +131,7 @@ def fetch_all():
         errs.append(f"farside {e}")
     # 1b. 同一张 Farside 全量表经 r.jina.ai 转成纯文本（直连被 Cloudflare 挡时用），按固定格式解析，不靠大模型抄数
     try:
-        body, code = _curl(JINA + URL, timeout=120, accept="text/plain")
+        body, code = _curl(JINA + URL, ("--connect-timeout", "10"), timeout=60, accept="text/plain")
         t = _parse_farside_text(body) if code == "200" else None
         if t is not None and len(t) >= 25:
             return t, "farside"

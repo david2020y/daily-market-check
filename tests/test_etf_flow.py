@@ -271,6 +271,27 @@ class FarsideText(unittest.TestCase):
         with self.assertRaises(ValueError):
             ef._parse_farside_text(PIPE_PAGE.replace("| 21.1 |", "| 99.9 |"))
 
+    def test_truncated_page_rejected(self):
+        cut = PIPE_PAGE[:PIPE_PAGE.index("| 09 Oct 2026")] + "| 09 Oct 2026 | 22.4 | (3.6) |"   # 断在行中
+        with self.assertRaises(ValueError):
+            ef._parse_farside_text(cut)
+        no_footer = PIPE_PAGE[:PIPE_PAGE.index("| Total |")]                                  # 断在行尾
+        with self.assertRaises(ValueError):
+            ef._parse_farside_text(no_footer)
+        with self.assertRaises(ValueError):
+            ef._parse_farside_text(PIPE_PAGE.replace("| (484.9) |", "| (484 |"))              # 半截数字
+
+    def test_pending_latest_row_skipped(self):
+        page = PIPE_PAGE.replace("| 09 Oct 2026 | 22.4 | (3.6) | 2.3 | 21.1 |", "| 09 Oct 2026 | - | (3.6) | 2.3 | (1.3) |")
+        t = ef._parse_farside_text(page)
+        self.assertEqual(t["Date"].max().strftime("%Y-%m-%d"), "2026-10-07")               # IBIT 未报的当天不收
+
+    def test_curl_nonzero_exit_is_failure(self):
+        cp = mock.Mock(returncode=18, stdout="partial body\n200")
+        with mock.patch.object(ef.subprocess, "run", return_value=cp):
+            body, code = ef._curl("https://example.com/")
+        self.assertNotEqual(code, "200")
+
     def test_challenge_page_gives_no_rows(self):
         self.assertTrue(ef._parse_farside_text("Title: Just a moment...\nEnable JavaScript").empty)
 
@@ -278,7 +299,7 @@ class FarsideText(unittest.TestCase):
 class ChannelOrder(unittest.TestCase):
     def test_direct_403_then_jina_used_and_labelled_farside(self):
         days = trading_days(30)
-        page = "| | IBIT | |\n" + "".join(f"| {d.strftime('%d %b %Y')} | 10.0 | 10.0 |\n" for d in days)
+        page = "| | IBIT | |\n" + "".join(f"| {d.strftime('%d %b %Y')} | 10.0 | 10.0 |\n" for d in days) + "| Total | 300 | 300 |\n"
         calls = []
 
         def fake_curl(url, extra=(), timeout=40, accept="text/html,application/json"):
