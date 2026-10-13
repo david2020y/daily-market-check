@@ -13,6 +13,19 @@
 10. 定时任务：聊天 Scheduled 无 bash 抓不到 ETF（Farside 403 / SoSoValue 需 POST），改为 Routine（或 GitHub Actions，二选一）跑脚本写 docs/latest.md，简报只读该文件。
 11. TradingView 指标砍到 EMA20/EMA50/牛市支撑带/200 周，三态 K 线，删抵扣价（对 EMA 无意义）。
 
+## 2026-10-13 ETF 数据修复：收件箱 + 历史文件（交接摘要）
+- **问题**：docs/log.csv 10/10 起 ETF 字段全空，latest.md 写「ETF 数据缺失（三渠道均失败）」，ETF 刹车停摆。
+  根因（云端实测）：① Farside 两个页面对 curl 返回 Cloudflare 403「Just a moment...」；② SoSoValue 免费接口 openapi/v2/etf/historicalInflowChart 已下线（HTTP 404「接口不存在」，10/09 前还能用）；③ Farside 当月备用表同样 403。
+- **改了什么**：
+  1. scripts/etf_flow.py 新增「收件箱」渠道：环境变量 ETF_INBOX 指向的 JSON（[["YYYY-MM-DD", 当日 Total(百万美元，流出为负)], ...]）存在且能解析时优先用；文件不存在不报错；格式不对就回落到原三个渠道。Total 为 null/空白/"-"/0 的行视为休市跳过。
+  2. 新增 docs/etf_history.csv（Date, Total, source）：任何渠道取到的数据都并入（按日期去重，新的覆盖旧的，原子写入），四个指标一律从这个历史文件算。历史跟随 --out 目录；不带 --out 时只读不写；历史文件损坏时不覆盖它。
+  3. 指标算法与刹车阈值逐字未改（抽成 metrics()）；样本 < 25 行标 partial，< 20 行时 20 日占比为 None（不刹车、不估算）。
+  4. 当天所有渠道都失败 → 仍输出「ETF 数据缺失」，不用旧历史顶替（保持原行为，避免用过期数据刹车/解刹车）。
+  5. latest.md ETF 小节格式不变，来源显示最新一行的来源（inbox / farside / sosovalue / farside-monthly）。
+  6. data/inbox/ 加入 .gitignore；每日看盘定时任务新增步骤 1b：WebFetch 读 Farside 写 data/inbox/etf.json，再 ETF_INBOX=data/inbox/etf.json 跑脚本；月报去掉发邮件步骤。
+- **补历史**：Farside 全量表经 r.jina.ai 网页转文本服务取得（直连 403），2024-01-11 → 2026-10-12 共 690 个交易日（剔除 16 个全「-」休市行）。校验：每行 12 只基金之和 = Total（误差 ≤0.35，0 行不符）；与 Farside /btc/ 页面最近 13 行逐行一致；用历史重算 9/21–10/07 共 13 个数据日的四个指标，与当时 SoSoValue 渠道的输出 12 天完全一致，10/07 仅因两家数据源差 2.2（-484.9 vs -487.1）导致本周累计 -4.56 vs -4.58 亿。
+- **怎么验证**：python3 -m unittest discover -s tests（15 个测试：收件箱含负数/括号/休市行/坏格式、合并去重新覆盖旧、历史不足 partial 且不刹车、全渠道失败为缺失、write=False 不写、损坏历史不覆盖、阈值不变）；端到端：ETF_INBOX=<测试收件箱> python3 scripts/daily_check.py --out /tmp/xxx，ETF 小节应显示「数据截至 …（inbox）」且 docs/ 不变。
+
 ## 待办 / 待校正
 - 2027 年起每年月报校正下一减半日估算（当前 2028-04-15）
 - 周期底 2026-06-30 若被跌破，周期层假设失效，退回 --mode trend
