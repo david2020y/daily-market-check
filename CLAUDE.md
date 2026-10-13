@@ -9,7 +9,7 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - scripts/daily_check.py：日报（六行结论 + log.csv）；scripts/monthly_report.py：月报；scripts/etf_flow.py：ETF 数据
 - tradingview/trend_cycle_v3.pine：与日报一致的图表指标；tradingview/etf_proxy_v1.pine：副图 ETF 先行代理（Coinbase 溢价/IBIT 量比/CME 基差，仅参考不做信号）
 - research/：回测脚本；docs/：每日产物（latest.md/json、log.csv、monthly-*.md、etf_history.csv）
-- scripts/etf_flow.py 渠道：收件箱 ETF_INBOX（定时任务 WebFetch 写 data/inbox/etf.json，不提交）→ Farside → SoSoValue → Farside 当月表；取到的数据并入 docs/etf_history.csv，指标从历史算
+- scripts/etf_flow.py 渠道：收件箱 ETF_INBOX（定时任务 WebFetch 写 data/inbox/etf.json，不提交）→ Farside → Farside 经 r.jina.ai（云端实际在用的渠道）→ SoSoValue → Farside 当月表；取到的数据并入 docs/etf_history.csv，指标从历史算
 - tests/：单元测试，python3 -m unittest discover -s tests
 - DECISIONS.md：决策日志（结论 + 证据），改规则前必读
 - .github/workflows/daily.yml：GitHub Actions，定时已关闭、只留手动触发；日报/月报由 Routine 跑，不要重新打开 schedule
@@ -40,3 +40,4 @@ Routine 日报是另一套东西、独立运行，本仓库不负责也不改动
 - 2026-10-01 日报输出改为手机友好格式：一句话结论 + 动作/关键价/状态/周期/ETF/理由六个小节（每项一行），日志行移出 latest.md（log.csv 不变）；规则与数字未动，同步 SKILL.md 输出格式
 - 2026-10-13 本机路径统一为 /Users/willmax/Documents/个人系统/交易策略工作库/daily-market-check，废弃旧路径 ~/Documents/交易策略工作库
 - 2026-10-13 ETF 修复：etf_flow 加收件箱渠道（ETF_INBOX）与 docs/etf_history.csv（690 个交易日，指标从历史算），阈值与刹车逻辑未动；加 tests/；看盘任务加步骤 1b（WebFetch Farside → 收件箱），月报去掉邮件。详见 DECISIONS.md 2026-10-13
+- 2026-10-13 David 选方案 B：etf_flow 加「Farside 经 r.jina.ai」渠道（直连 403 时用），固定格式解析全量表、逐行校验基金之和，来源仍记 farside；不靠大模型抄数，看盘提示词不必再改

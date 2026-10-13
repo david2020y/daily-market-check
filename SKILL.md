@@ -18,7 +18,7 @@ description: 每日 BTC/ETH 看盘与决策 SOP（v3）。一条命令跑 script
    - 用户要月报：`python3 .../scripts/monthly_report.py --month YYYY-MM --log <docs>/log.csv`，第 1–4 节照抄，第 5 节按模板填
    - 用户明确要关闭周期层：加 `--mode trend`（退回 v2 纯趋势）
 2. **原样输出**脚本打印的内容（一句话结论 + 六个小节）。不许改措辞、增删指标、改数字或加评论。
-3. 脚本自己处理数据缺失：K 线 Crypto.com → OKX → Bybit；ETF 收件箱（环境变量 ETF_INBOX，定时任务每天用 WebFetch 抓 Farside 写入 data/inbox/etf.json）→ Farside → SoSoValue → Farside 备用表；费率 OKX → Bybit。
+3. 脚本自己处理数据缺失：K 线 Crypto.com → OKX → Bybit；ETF 收件箱（环境变量 ETF_INBOX，定时任务每天用 WebFetch 抓 Farside 写入 data/inbox/etf.json）→ Farside → Farside（经 r.jina.ai 转文本，按固定格式解析，每行校验各基金之和 = Total）→ SoSoValue → Farside 备用表；费率 OKX → Bybit。
    ETF 任何渠道取到的数据都并入 docs/etf_history.csv（按日期去重，新的覆盖旧的），四个指标一律从这个历史文件算；当天所有渠道都失败才写「ETF 数据缺失」，不用旧历史顶替。
    ETF 缺失时脚本写「ETF 数据缺失｜刹车：无」，**动作与关键价照常给出**；费率缺失只影响「合约」那一段。你不要因为看到「缺失」就把动作改成「无操作」——这是最常见的跑偏，出现即错。
 4. 想看原始数值加 `--json`。不需要再调 MCP 或 curl 网页。

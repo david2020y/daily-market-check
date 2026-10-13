@@ -235,5 +235,66 @@ class MetricsUnchanged(unittest.TestCase):
         self.assertEqual(m2.get("regime"), "牛市节奏")
 
 
+# r.jina.ai 转出的两种排版（结构照抄真实页面，数字取自 Farside 2026-10）
+PIPE_PAGE = """Title: Farside Investors
+
+|  | IBIT | FBTC | GBTC |  |
+| --- | --- | --- | --- | --- |
+| Fee | 0.25% | 0.25% | 1.50% |  |
+| 06 Oct 2026 | 122.0 | 0.0 | (3.2) | 118.8 |
+| 07 Oct 2026 | (207.7) | (105.1) | (172.1) | (484.9) |
+| 08 Oct 2026 | - | - | - | 0.0 |
+| 09 Oct 2026 | 22.4 | (3.6) | 2.3 | 21.1 |
+| Total | 65,668 | 10,525 | (27,944) | 57,112 |
+| Average | 95.2 | 15.3 | (40.5) | 82.8 |
+"""
+CELL_PAGE = "Bitcoin ETF Flow \u2013 All Data (US$m)\nDate\t\nIBIT\n\t\nFBTC\n\t\nTotal\n\n\n" + "".join(
+    f"{d}\t\n{a}\n\t\n{b}\n\t\n{t}\n\n" for d, a, b, t in [
+        ("11 Jan 2024", "111.7", "227.0", "338.7"),
+        ("15 Jan 2024", "-", "-", "0.0"),
+        ("16 Jan 2024", "212.7", "(1,265.4)", "(1,052.7)"),
+    ]) + "Total\t\n65,668\n\t\n10,525\n\t\n76,193\n"
+
+
+class FarsideText(unittest.TestCase):
+    def test_pipe_table(self):
+        t = ef._parse_farside_text(PIPE_PAGE)
+        self.assertEqual(t["Date"].dt.strftime("%Y-%m-%d").tolist(), ["2026-10-06", "2026-10-07", "2026-10-09"])  # 休市行跳过
+        self.assertEqual(t["Total"].tolist(), [118.8, -484.9, 21.1])
+
+    def test_one_cell_per_line(self):
+        t = ef._parse_farside_text(CELL_PAGE)
+        self.assertEqual(t["Date"].dt.strftime("%Y-%m-%d").tolist(), ["2024-01-11", "2024-01-16"])
+        self.assertEqual(t["Total"].tolist(), [338.7, -1052.7])
+
+    def test_sum_mismatch_rejects_whole_page(self):
+        with self.assertRaises(ValueError):
+            ef._parse_farside_text(PIPE_PAGE.replace("| 21.1 |", "| 99.9 |"))
+
+    def test_challenge_page_gives_no_rows(self):
+        self.assertTrue(ef._parse_farside_text("Title: Just a moment...\nEnable JavaScript").empty)
+
+
+class ChannelOrder(unittest.TestCase):
+    def test_direct_403_then_jina_used_and_labelled_farside(self):
+        days = trading_days(30)
+        page = "| | IBIT | |\n" + "".join(f"| {d.strftime('%d %b %Y')} | 10.0 | 10.0 |\n" for d in days)
+        calls = []
+
+        def fake_curl(url, extra=(), timeout=40, accept="text/html,application/json"):
+            calls.append(url)
+            if url == ef.URL:
+                return "<title>Just a moment...</title>", "403"
+            if url == ef.JINA + ef.URL:
+                return page, "200"
+            raise AssertionError(f"不该走到 {url}")
+
+        with mock.patch.object(ef, "_curl", fake_curl):
+            t, src = ef.fetch_all()
+        self.assertEqual(src, "farside")
+        self.assertEqual(len(t), 30)
+        self.assertEqual(calls, [ef.URL, ef.JINA + ef.URL])
+
+
 if __name__ == "__main__":
     unittest.main()

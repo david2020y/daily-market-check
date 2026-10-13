@@ -24,9 +24,10 @@
   5. latest.md ETF 小节格式不变，来源显示最新一行的来源（inbox / farside / sosovalue / farside-monthly）。
   6. data/inbox/ 加入 .gitignore；每日看盘定时任务新增步骤 1b：WebFetch 读 Farside 写 data/inbox/etf.json，再 ETF_INBOX=data/inbox/etf.json 跑脚本；月报去掉发邮件步骤。
 - **补历史**：Farside 全量表经 r.jina.ai 网页转文本服务取得（直连 403），2024-01-11 → 2026-10-12 共 690 个交易日（剔除 16 个全「-」休市行）。校验：每行 12 只基金之和 = Total（误差 ≤0.35，0 行不符）；与 Farside /btc/ 页面最近 13 行逐行一致；用历史重算 9/21–10/07 共 13 个数据日的四个指标，与当时 SoSoValue 渠道的输出 12 天完全一致，10/07 仅因两家数据源差 2.2（-484.9 vs -487.1）导致本周累计 -4.56 vs -4.58 亿。
-- **怎么验证**：python3 -m unittest discover -s tests（19 个测试：收件箱含负数/括号/休市行/坏格式/周末/超范围、合并去重新覆盖旧、历史不足 partial 且不刹车、历史断档不跨洞、全渠道失败为缺失、write=False 不写、损坏历史不覆盖、阈值不变）；端到端：ETF_INBOX=<测试收件箱> python3 scripts/daily_check.py --out /tmp/xxx，ETF 小节应显示「数据截至 …（inbox）」且 docs/ 不变。
+- **怎么验证**：python3 -m unittest discover -s tests（24 个测试：Farside 文本两种排版/休市行/基金之和对不上整张作废/挑战页、直连 403 后改走 r.jina.ai、收件箱含负数/括号/休市行/坏格式/周末/超范围、合并去重新覆盖旧、历史不足 partial 且不刹车、历史断档不跨洞、全渠道失败为缺失、write=False 不写、损坏历史不覆盖、阈值不变）；端到端：ETF_INBOX=<测试收件箱> python3 scripts/daily_check.py --out /tmp/xxx，ETF 小节应显示「数据截至 …（inbox）」且 docs/ 不变。
 - **复核**：4 个独立审查（需求逐条 / 无人值守鲁棒性 / 新旧算法等价 / 数据完整性）+ 每条发现 2 人反驳验证。确认 5 条：历史断档被跨过（3 条同源，已修）、收件箱可接受周末/远古日期（已修）、步骤 1b 的 WebFetch 在云端被 Farside 403（见下）。
-- **未决风险（待 David 选）**：2026-10-13 在云端会话里 WebFetch https://farside.co.uk/btc/ 两次都返回 403（curl 也是 Cloudflare 403），同一页面经 https://r.jina.ai/https://farside.co.uk/btc/ 可读（13 行）。若定时任务里的 WebFetch 同样 403，步骤 1b 写不出收件箱，ETF 仍为缺失。备选：A 步骤 1b 加一句「403 时改读 r.jina.ai 版本」；B 脚本里加 Farside（经 r.jina.ai）渠道，按固定格式解析全量表，不靠大模型抄数。另：/btc/ 页面只有约 13 行，达不到提示词里的 40 行，靠 etf_history.csv 补足。
+- **已决（David 选 B）**：etf_flow.fetch_all 在 Farside 直连之后加一个渠道：curl https://r.jina.ai/https://farside.co.uk/bitcoin-etf-flow-all-data/，按固定格式解析（markdown 竖线表 / 每格一行两种排版都认），每行校验 12 只基金之和 = Total（容差 1.0），任何一行对不上整张作废；来源仍记 farside。云端实测 5 秒取回 690 行，与 etf_history.csv 逐行一致。收件箱仍排第一（WebFetch 若能用就优先用），读不到也不影响。依赖第三方 r.jina.ai：它挂了就回到「ETF 数据缺失」，不估算。
+- **原风险记录**：2026-10-13 在云端会话里 WebFetch https://farside.co.uk/btc/ 两次都返回 403（curl 也是 Cloudflare 403），同一页面经 https://r.jina.ai/https://farside.co.uk/btc/ 可读（13 行）。若定时任务里的 WebFetch 同样 403，步骤 1b 写不出收件箱，ETF 仍为缺失。备选：A 步骤 1b 加一句「403 时改读 r.jina.ai 版本」；B 脚本里加 Farside（经 r.jina.ai）渠道，按固定格式解析全量表，不靠大模型抄数。另：/btc/ 页面只有约 13 行，达不到提示词里的 40 行，靠 etf_history.csv 补足。
 
 ## 待办 / 待校正
 - 2027 年起每年月报校正下一减半日估算（当前 2028-04-15）

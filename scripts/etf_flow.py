@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """BTC 现货 ETF 日度净流 → 4 个刹车指标。输出 JSON，一行。
 用法: python3 etf_flow.py            （只读 docs/etf_history.csv，不写）
-渠道：收件箱（环境变量 ETF_INBOX 指向的 JSON）→ Farside 全量 → SoSoValue → Farside 当月表。
+渠道：收件箱（环境变量 ETF_INBOX 指向的 JSON）→ Farside 全量 → Farside 全量（经 r.jina.ai 转文本）→ SoSoValue → Farside 当月表。
 任何渠道取到的数据都并入 docs/etf_history.csv（按日期去重，新的覆盖旧的），指标一律从这个历史文件算。
 当天所有渠道都失败时输出 {"status": "missing", "reason": ...}，调用方按「ETF 数据缺失」处理，不估算。"""
-import json, sys, io, os, math
+import json, sys, io, os, math, re
 import datetime as dt
 import subprocess, pandas as pd, numpy as np
 
 URL = "https://farside.co.uk/bitcoin-etf-flow-all-data/"
 URL_ALT = "https://farside.co.uk/?p=997"          # Farside 备用表（仅当月，约 15-22 行）
+JINA = "https://r.jina.ai/"   # 第三方网页转文本服务：Farside 对脚本直连回 Cloudflare 403，经它能读到同一张表（2026-10-13 实测）
+SUM_TOL = 1.0                 # 百万美元；12 只基金各舍入到 0.1，合计最多差约 0.65
 SOSO = "https://api.sosovalue.xyz/openapi/v2/etf/historicalInflowChart"  # SoSoValue 开放接口，POST，无需 key
 DEFAULT_HISTORY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "etf_history.csv"))
 HIST_COLS = ["Date", "Total", "source"]
@@ -28,9 +30,9 @@ def num(x):
     return -float(s.strip("()")) if s.startswith("(") else float(s)
 
 
-def _curl(url, extra=()):
-    cp = subprocess.run(["curl", "-sL", "--compressed", "-m", "40", "-A", UA,
-                         "-H", "Accept: text/html,application/json", "-H", "Accept-Language: en-US,en;q=0.9",
+def _curl(url, extra=(), timeout=40, accept="text/html,application/json"):
+    cp = subprocess.run(["curl", "-sL", "--compressed", "-m", str(timeout), "-A", UA,
+                         "-H", f"Accept: {accept}", "-H", "Accept-Language: en-US,en;q=0.9",
                          *extra, "-w", "\n%{http_code}", url], capture_output=True, text=True)
     body, _, code = cp.stdout.rpartition("\n")
     return body, code.strip()
@@ -50,8 +52,50 @@ def _parse_farside(body):
     return t[["Date", "Total"]].dropna().sort_values("Date").reset_index(drop=True)
 
 
+_DATE_RE = re.compile(r"^\d{2} [A-Z][a-z]{2} \d{4}$")
+_CELL_RE = re.compile(r"^(-|\(?-?[\d,]+(\.\d+)?\)?)$")
+
+
+def _parse_farside_text(txt):
+    """解析 r.jina.ai 转出的 Farside 表。两种排版都认：markdown 竖线表（/btc/ 页）和每格一行（全量页）。
+    日期后面连续的数字格 = 各基金 + 最后一格 Total；基金全是「-」的休市行跳过。
+    每行校验「各基金之和 ≈ Total」，任何一行对不上就整张作废（抛异常，走下一个渠道），不猜。"""
+    toks = []
+    for line in txt.splitlines():
+        if line.lstrip().startswith("|"):
+            toks.extend(c.strip() for c in line.strip().strip("|").split("|"))
+        else:
+            toks.extend(c.strip() for c in line.split("\t"))
+    rows, i = {}, 0
+    while i < len(toks):
+        if not _DATE_RE.match(toks[i]):
+            i += 1
+            continue
+        d, vals, i = toks[i], [], i + 1
+        while i < len(toks) and not _DATE_RE.match(toks[i]):
+            if toks[i] == "":                          # 空格子/空行：跳过，遇到下一个日期或非数字文字才算本行结束
+                i += 1
+                continue
+            if not _CELL_RE.match(toks[i]):
+                break
+            vals.append(toks[i])
+            i += 1
+        if len(vals) < 2:
+            continue
+        funds, total = vals[:-1], vals[-1]
+        if all(v == "-" for v in funds):               # 休市行
+            continue
+        tot = num(total)
+        s = sum(num(v) for v in funds if v != "-")
+        if not math.isfinite(tot) or abs(s - tot) > SUM_TOL:
+            raise ValueError(f"Farside 文本 {d} 各基金之和 {s:.1f} ≠ Total {total}")
+        rows[pd.to_datetime(d, format="%d %b %Y")] = tot
+    return pd.DataFrame(sorted(rows.items()), columns=["Date", "Total"])
+
+
 def fetch_all():
-    """渠道链：Farside 全量 → SoSoValue API → Farside 当月备用表。返回 (DataFrame[Date,Total], 来源名)。"""
+    """渠道链：Farside 全量 → Farside 全量（经 r.jina.ai）→ SoSoValue API → Farside 当月备用表。
+    返回 (DataFrame[Date,Total], 来源名)；经 r.jina.ai 读到的仍是 Farside 的数，来源记 farside。"""
     errs = []
     # 1. Farside 全量表（Cloudflare 按 UA/TLS 指纹拦截，必须 curl+完整 UA）
     try:
@@ -61,6 +105,15 @@ def fetch_all():
         errs.append(f"farside {code}/{len(body)}")
     except Exception as e:
         errs.append(f"farside {e}")
+    # 1b. 同一张 Farside 全量表经 r.jina.ai 转成纯文本（直连被 Cloudflare 挡时用），按固定格式解析，不靠大模型抄数
+    try:
+        body, code = _curl(JINA + URL, timeout=120, accept="text/plain")
+        t = _parse_farside_text(body) if code == "200" else None
+        if t is not None and len(t) >= 25:
+            return t, "farside"
+        errs.append(f"farside-jina {code}/{0 if t is None else len(t)}")
+    except Exception as e:
+        errs.append(f"farside-jina {str(e)[:60]}")
     # 2. SoSoValue 开放接口（JSON，单位美元）
     try:
         body, code = _curl(SOSO, ("-X", "POST", "-H", "Content-Type: application/json",
