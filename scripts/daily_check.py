@@ -276,7 +276,8 @@ def main():
     ap.add_argument("--out", default=None, help="写 latest.md / latest.json 并追加 log.csv 到该目录")
     a = ap.parse_args()
     btc, eth = trend("BTC"), trend("ETH")
-    etf = etf_flow.compute()
+    # ETF 历史跟随 --out 目录（docs/etf_history.csv）；不写 --out 时只读 docs 里的历史
+    etf = etf_flow.compute(history=os.path.join(a.out, "etf_history.csv") if a.out else None, write=bool(a.out))
     fr = funding("BTC")
     cy = cycle(a.date)
     tags, regime = brakes(etf, btc)

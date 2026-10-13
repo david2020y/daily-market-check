@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .DS_Store
 .claude/settings.local.json
+
+# 定时任务每天抓的 ETF 收件箱，不提交
+data/inbox/
