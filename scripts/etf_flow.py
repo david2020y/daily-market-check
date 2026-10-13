@@ -13,6 +13,10 @@ URL_ALT = "https://farside.co.uk/?p=997"          # Farside 备用表（仅当�
 SOSO = "https://api.sosovalue.xyz/openapi/v2/etf/historicalInflowChart"  # SoSoValue 开放接口，POST，无需 key
 DEFAULT_HISTORY = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "etf_history.csv"))
 HIST_COLS = ["Date", "Total", "source"]
+MAX_GAP_DAYS = 4        # 相邻交易日最多隔 4 个自然日（周末 + 一天休市，历史实测上限）；更大视为断档
+INBOX_MAX_AGE_DAYS = 120  # 收件箱只装最近约 40 个交易日；更早的日期多半是读错年份
+INBOX_MAX_ABS = 5000      # 百万美元；历史最大单日 |净流| 约 1,374，超过视为读错
+DASHES = "\u2212\u2013\u2014"  # 数学负号 / en dash / em dash（大模型抄表时常见）→ 当作 "-"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")  # 短 UA 会被 Cloudflare 403
 
@@ -84,31 +88,36 @@ def fetch_all():
     raise RuntimeError(" | ".join(errs))
 
 
-def parse_inbox(path):
+def parse_inbox(path, today=None):
     """收件箱：JSON 数组 [["YYYY-MM-DD", 当日 Total], ...]，单位百万美元，流出为负数。
     文件不存在 → None（不报错）；格式不对 → ValueError（调用方回落到网络渠道）。
     Total 为 null / 空白 / "-" / 0 的行视为休市或未更新，跳过（与 SoSoValue 渠道的 0 处理一致）。"""
     if not path or not os.path.isfile(path):
         return None
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         rows = json.load(fh)
     if not isinstance(rows, list):
         raise ValueError("收件箱不是 JSON 数组")
-    latest_ok = pd.Timestamp(dt.datetime.now(dt.timezone.utc).date()) + pd.Timedelta(days=1)
+    today = pd.Timestamp(today) if today is not None else pd.Timestamp(dt.datetime.now(dt.timezone.utc).date())
+    latest_ok, earliest_ok = today + pd.Timedelta(days=1), today - pd.Timedelta(days=INBOX_MAX_AGE_DAYS)
     vals = {}
     for row in rows:
         if not isinstance(row, (list, tuple)) or len(row) != 2 or not isinstance(row[0], str):
             raise ValueError(f"收件箱行格式不对: {row!r}"[:80])
         d = pd.to_datetime(row[0].strip(), format="%Y-%m-%d")
-        if d > latest_ok:
-            raise ValueError(f"收件箱日期在未来: {row[0]}")
+        if d > latest_ok or d < earliest_ok:
+            raise ValueError(f"收件箱日期超出范围: {row[0]}")
+        if d.weekday() >= 5:                          # Farside 只列交易日，周末日期说明读错了
+            raise ValueError(f"收件箱有周末日期: {row[0]}")
         v = row[1]
-        if v is None or (isinstance(v, str) and v.strip() in ("", "-")):
+        if isinstance(v, str):
+            v = v.translate({ord(c): "-" for c in DASHES}).strip()
+        if v is None or (isinstance(v, str) and v.strip("-") == ""):
             continue
         if isinstance(v, bool) or not isinstance(v, (int, float, str)):
             raise ValueError(f"收件箱数值不对: {row!r}"[:80])
         x = float(v) if not isinstance(v, str) else num(v)
-        if not math.isfinite(x):
+        if not math.isfinite(x) or abs(x) > INBOX_MAX_ABS:
             raise ValueError(f"收件箱数值不对: {row!r}"[:80])
         if x == 0:
             continue
@@ -149,9 +158,19 @@ def save_history(h, path):
     os.replace(tmp, path)
 
 
+def contiguous_tail(t):
+    """只取最后一段没有断档的历史（相邻两行间隔 ≤ MAX_GAP_DAYS 个自然日）。
+    断档之前的数据不参与指标，避免把几周前的旧数据和新数据拼成「20 日」窗口。"""
+    gaps = t["Date"].diff().dt.days
+    cut = gaps.index[gaps > MAX_GAP_DAYS]
+    return t.loc[cut[-1]:].reset_index(drop=True) if len(cut) else t.reset_index(drop=True)
+
+
 def metrics(t, src):
     """从历史（Date, Total[, source]，按日期从旧到新）算 4 个刹车指标。规则与阈值同 v3，未改。
-    样本不足 25 行标 partial；不足 20 行时 20 日占比为 None（不刹车、不估算）。"""
+    只用最后一段连续的历史；样本不足 25 行标 partial；不足 20 行时 20 日占比为 None（不刹车、不估算）。"""
+    full_start = t["Date"].iloc[0]
+    t = contiguous_tail(t)
     f = t["Total"]
     short = len(f) < 25
 
@@ -192,6 +211,8 @@ def metrics(t, src):
         "consec_inflow_weeks": weeks,
         "brake": [],
     }
+    if t["Date"].iloc[0] != full_start:              # 历史有断档：注明指标从哪天起算
+        out["window_start"] = t["Date"].iloc[0].strftime("%Y-%m-%d")
     if in20 is not None and in20 <= 10:
         out["brake"].append("熊市节奏")
     if week_sum > 2500:

@@ -9,8 +9,12 @@ import pandas as pd  # noqa: E402
 import etf_flow as ef  # noqa: E402
 
 
-def trading_days(n, end="2026-10-12"):
-    return list(pd.bdate_range(end=end, periods=n))
+TODAY = pd.Timestamp("2026-10-13")                       # 收件箱解析测试固定「今天」
+LAST_BDAY = pd.Timestamp.today().normalize() - pd.offsets.BDay(1)  # compute() 用真实今天，测试日期跟着走
+
+
+def trading_days(n, end=None):
+    return list(pd.bdate_range(end=end or LAST_BDAY, periods=n))
 
 
 class TmpDir(unittest.TestCase):
@@ -32,7 +36,7 @@ class ParseInbox(TmpDir):
     def test_negative_numbers_and_order(self):
         p = self.write_json("etf.json", [["2026-10-09", 21.1], ["2026-10-07", -484.9],
                                          ["2026-10-08", "(244.1)"], ["2026-10-12", "-65.4"]])
-        t = ef.parse_inbox(p)
+        t = ef.parse_inbox(p, today=TODAY)
         self.assertEqual(t["Date"].dt.strftime("%Y-%m-%d").tolist(),
                          ["2026-10-07", "2026-10-08", "2026-10-09", "2026-10-12"])
         self.assertEqual(t["Total"].tolist(), [-484.9, -244.1, 21.1, -65.4])
@@ -43,9 +47,9 @@ class ParseInbox(TmpDir):
         self.assertIsNone(ef.parse_inbox(""))
 
     def test_skips_holiday_markers(self):
-        p = self.write_json("etf.json", [["2026-10-08", "-"], ["2026-10-09", None], ["2026-10-10", 0],
-                                         ["2026-10-12", 5.5]])
-        t = ef.parse_inbox(p)
+        p = self.write_json("etf.json", [["2026-10-06", "-"], ["2026-10-07", None], ["2026-10-08", 0],
+                                         ["2026-10-09", "\u2014"], ["2026-10-12", 5.5]])
+        t = ef.parse_inbox(p, today=TODAY)
         self.assertEqual(len(t), 1)
         self.assertEqual(t["Total"].iloc[0], 5.5)
 
@@ -57,20 +61,30 @@ class ParseInbox(TmpDir):
             [["2026-10-12", "abc"]],                # 数值不对
             [["2026-10-12", True]],                 # 布尔值
             [["2099-01-01", 1.0]],                  # 未来日期
+            [["2025-10-13", 1.0]],                  # 超过 120 天：多半读错年份
+            [["2026-10-10", 1.0]],                  # 周六：Farside 不会有
+            [["2026-10-12", 98765.0]],              # 超出合理范围
             [["2026-10-12", "-"]],                  # 一行有效数据都没有
             [],
         ]
         for i, obj in enumerate(bad):
             with self.subTest(case=obj):
                 with self.assertRaises(ValueError):
-                    ef.parse_inbox(self.write_json(f"bad{i}.json", obj))
+                    ef.parse_inbox(self.write_json(f"bad{i}.json", obj), today=TODAY)
+
+    def test_unicode_minus_and_bom(self):
+        p = os.path.join(self.dir, "bom.json")
+        with open(p, "w", encoding="utf-8-sig") as fh:
+            json.dump([["2026-10-07", "\u2212484.9"], ["2026-10-08", "1,234.5"]], fh)
+        t = ef.parse_inbox(p, today=TODAY)
+        self.assertEqual(t["Total"].tolist(), [-484.9, 1234.5])
 
     def test_rejects_invalid_json(self):
         p = os.path.join(self.dir, "broken.json")
         with open(p, "w") as fh:
             fh.write("[[\"2026-10-12\", 1.0")
         with self.assertRaises(ValueError):
-            ef.parse_inbox(p)
+            ef.parse_inbox(p, today=TODAY)
 
 
 class MergeHistory(TmpDir):
@@ -175,6 +189,35 @@ class Compute(TmpDir):
         self.assertIn("history_error", out)
         with open(hist) as fh:
             self.assertEqual(fh.read(), "garbage\n1,2\n")
+
+
+class HistoryGap(TmpDir):
+    def test_gap_is_not_bridged(self):
+        """历史在几周前断档，收件箱只有最近 13 天：不能把断档前的旧数据拼进 20 日窗口。"""
+        recent = trading_days(13)
+        old = trading_days(30, end=recent[0] - pd.Timedelta(days=40))   # 断档 > 4 周
+        hist_rows = [(d, -10.0) for d in old]                           # 旧数据全是流出
+        inbox = [[d.strftime("%Y-%m-%d"), 10.0 if i % 4 else -10.0] for i, d in enumerate(recent)]
+        out, _, _ = Compute.run_compute(self, inbox, hist_rows)
+        self.assertEqual(out["status"], "ok")
+        self.assertTrue(out["partial"])
+        self.assertIsNone(out["inflow_days_20"])
+        self.assertNotIn("熊市节奏", out["brake"])
+        self.assertEqual(out["window_start"], recent[0].strftime("%Y-%m-%d"))
+
+    def test_streak_stops_at_gap(self):
+        old = trading_days(10, end="2026-08-14")
+        new = trading_days(3, end="2026-10-09")
+        t = pd.DataFrame({"Date": old + new, "Total": [5.0] * 13})
+        m = ef.metrics(t, "farside")
+        self.assertEqual(m["streak_days"], 3)
+
+    def test_normal_holiday_gap_is_kept(self):
+        days = [d for d in trading_days(31, end="2026-10-09") if d != pd.Timestamp("2026-09-07")]  # 周一休市：隔 4 天
+        t = pd.DataFrame({"Date": days, "Total": [5.0] * len(days)})
+        m = ef.metrics(t, "farside")
+        self.assertNotIn("window_start", m)
+        self.assertEqual(m["inflow_days_20"], 20)
 
 
 class MetricsUnchanged(unittest.TestCase):
